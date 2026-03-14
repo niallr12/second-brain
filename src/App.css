@@ -1,0 +1,491 @@
+.shell,
+.workspace-shell {
+  width: min(1480px, calc(100vw - 2rem));
+  margin: 0 auto;
+  padding: 2rem 0 3rem;
+}
+
+.minimal-shell {
+  width: min(960px, calc(100vw - 2rem));
+  margin: 0 auto;
+  padding: 1.5rem 0 2rem;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.minimal-topbar {
+  margin-bottom: 1rem;
+  align-items: center;
+}
+
+.topbar-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.route-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.eyebrow {
+  margin: 0 0 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.minimal-chat-wrap {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.minimal-chat-panel {
+  min-height: calc(100vh - 12rem);
+  display: flex;
+  flex-direction: column;
+}
+
+.minimal-intro {
+  max-width: 56ch;
+}
+
+.minimal-intro h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.minimal-intro p {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.subtle-banner {
+  margin-top: 1rem;
+  padding: 0.95rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(240, 136, 107, 0.24);
+  background: rgba(43, 26, 23, 0.72);
+}
+
+.subtle-banner strong {
+  display: block;
+}
+
+.subtle-banner p {
+  margin: 0.45rem 0 0;
+  color: var(--muted);
+}
+
+.minimal-messages {
+  flex: 1;
+  min-height: 20rem;
+  max-height: none;
+}
+
+.minimal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.minimal-meta span {
+  padding: 0.5rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(15, 20, 28, 0.88);
+  border: 1px solid var(--border);
+}
+
+.content-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(330px, 420px) minmax(0, 1fr);
+  margin-top: 1rem;
+}
+
+.sidebar,
+.chat-column {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.panel {
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(24, 31, 42, 0.96), rgba(17, 23, 32, 0.92));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 18px 60px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(12px);
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.panel-heading h2,
+.project-card h3,
+.root-note-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.panel-heading span,
+.microcopy,
+.composer-footer span,
+.root-note-card footer,
+.project-card header span,
+.message-meta,
+.activity-card footer {
+  color: var(--muted);
+}
+
+.field,
+.stack-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.stack-form {
+  margin-top: 1rem;
+}
+
+.field-row,
+.action-row {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.field span {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.field input,
+.field select,
+.field textarea,
+.composer textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 16px;
+  padding: 0.9rem 1rem;
+  background: rgba(10, 14, 20, 0.84);
+  color: var(--ink);
+  font: inherit;
+}
+
+.field input::placeholder,
+.field textarea::placeholder,
+.composer textarea::placeholder {
+  color: rgba(152, 166, 183, 0.72);
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.composer textarea:focus {
+  outline: 2px solid rgba(16, 163, 127, 0.18);
+  border-color: rgba(16, 163, 127, 0.52);
+}
+
+.primary-button,
+.secondary-button {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.primary-button:hover,
+.secondary-button:hover {
+  transform: translateY(-1px);
+}
+
+.primary-button,
+.secondary-button {
+  border-radius: 999px;
+  padding: 0.85rem 1.2rem;
+  font-weight: 700;
+}
+
+.primary-button {
+  margin-top: 1rem;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #f7fffd;
+}
+
+.compact-button {
+  margin-top: 0;
+}
+
+.secondary-button {
+  background: rgba(19, 26, 35, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  color: var(--ink);
+}
+
+.action-row {
+  grid-template-columns: 1fr;
+}
+
+.panel-copy {
+  margin-bottom: 0.45rem;
+  color: var(--muted);
+}
+
+.microcopy,
+.panel-copy,
+.empty-copy {
+  font-size: 0.92rem;
+}
+
+.health-block {
+  margin-top: 1rem;
+}
+
+.warning-list {
+  margin: 0.6rem 0 0;
+  padding-left: 1rem;
+  color: var(--muted);
+}
+
+.warning-list li + li {
+  margin-top: 0.35rem;
+}
+
+.note-stack,
+.project-list,
+.activity-list {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+
+.root-note-card,
+.project-card,
+.message,
+.activity-card {
+  border-radius: 18px;
+  padding: 1rem;
+  background: var(--surface-soft);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.root-note-card header,
+.project-card header,
+.composer-footer,
+.message-meta,
+.tool-call,
+.root-note-card footer,
+.activity-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.root-note-card p,
+.project-card p,
+.empty-state p,
+.activity-card p {
+  white-space: pre-wrap;
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+}
+
+.root-note-card footer,
+.activity-card footer {
+  margin-top: 0.8rem;
+  font-size: 0.82rem;
+}
+
+.activity-panel {
+  max-height: 28rem;
+}
+
+.activity-list {
+  max-height: 22rem;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.messages {
+  display: grid;
+  gap: 0.8rem;
+  min-height: 18rem;
+  max-height: 40vh;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.empty-state {
+  display: grid;
+  align-content: center;
+  min-height: 12rem;
+  padding: 1.5rem;
+  border-radius: 20px;
+  background: rgba(13, 18, 25, 0.9);
+  border: 1px dashed rgba(148, 163, 184, 0.16);
+}
+
+.message {
+  padding: 0.8rem 0.95rem;
+}
+
+.message-user {
+  background: rgba(16, 163, 127, 0.12);
+  border-color: rgba(16, 163, 127, 0.22);
+  max-width: 75%;
+  justify-self: end;
+}
+
+.message-assistant {
+  background: rgba(15, 20, 28, 0.92);
+}
+
+.message-error {
+  border-color: rgba(240, 136, 107, 0.22);
+  background: rgba(47, 24, 23, 0.88);
+}
+
+.message pre {
+  margin: 0.4rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  line-height: 1.45;
+}
+
+.tool-trace {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.8rem;
+}
+
+.tool-call {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.composer {
+  margin-top: 1rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 1rem;
+}
+
+.minimal-composer {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 22px;
+  background: rgba(10, 14, 20, 0.72);
+}
+
+.composer textarea {
+  resize: vertical;
+  min-height: 5.5rem;
+}
+
+.minimal-composer textarea {
+  min-height: 4.5rem;
+  padding: 0.8rem 0.9rem;
+}
+
+.composer-footer {
+  align-items: center;
+  margin-top: 0.8rem;
+}
+
+.success-banner,
+.error-banner {
+  margin-top: 1rem;
+  padding: 1rem 1.2rem;
+  border-radius: 18px;
+}
+
+.success-banner {
+  background: rgba(12, 48, 40, 0.92);
+  border: 1px solid rgba(16, 163, 127, 0.24);
+  color: #baf4e3;
+}
+
+.error-banner {
+  background: rgba(52, 24, 21, 0.92);
+  border: 1px solid rgba(240, 136, 107, 0.24);
+  color: #ffc8b8;
+}
+
+.messages::-webkit-scrollbar,
+.activity-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.messages::-webkit-scrollbar-thumb,
+.activity-list::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+}
+
+@media (max-width: 1180px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .activity-panel {
+    max-height: none;
+  }
+
+  .messages,
+  .activity-list {
+    max-height: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .shell,
+  .workspace-shell,
+  .minimal-shell {
+    width: min(100vw - 1rem, 100%);
+    padding-top: 1rem;
+  }
+
+  .topbar,
+  .minimal-topbar,
+  .route-actions,
+  .composer-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .minimal-chat-panel {
+    min-height: calc(100vh - 8rem);
+  }
+
+  .field-row {
+    grid-template-columns: 1fr;
+  }
+}

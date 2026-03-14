@@ -1,0 +1,59 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --bg-deep: #11161d;
+  --surface: rgba(18, 24, 33, 0.9);
+  --surface-strong: rgba(23, 30, 40, 0.96);
+  --surface-soft: rgba(28, 36, 48, 0.72);
+  --ink: #edf3fb;
+  --muted: #98a6b7;
+  --accent: #10a37f;
+  --accent-strong: #0d8d6e;
+  --warning: #f0886b;
+  --border: rgba(148, 163, 184, 0.16);
+  --font-display: "Avenir Next", "IBM Plex Sans", "Segoe UI Variable", sans-serif;
+  --font-body: "Avenir Next", "IBM Plex Sans", "Segoe UI Variable", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top center, rgba(16, 163, 127, 0.12), transparent 24%),
+    radial-gradient(circle at left top, rgba(57, 73, 96, 0.28), transparent 30%),
+    linear-gradient(180deg, var(--bg), var(--bg-deep));
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: transparent;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button,
+input,
+textarea,
+select {
+  color: inherit;
+}
+
+a {
+  color: inherit;
+}
