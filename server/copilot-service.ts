@@ -12,12 +12,12 @@ interface EmailAssistRequest {
   subject?: string
   goal?: string
   incomingEmail?: string
+  outputFormat?: 'short-reply' | 'full-reply' | 'bullet-summary' | 'reply-with-next-actions'
 }
 
 interface ToolCallLog {
   name: string
   status: 'started' | 'completed'
-  summary?: string
 }
 
 const rootNoteSchema = z.enum(['TODAY.md', 'WAITING.md', 'INBOX.md'])
@@ -94,10 +94,6 @@ export class CopilotService {
         toolCalls.push({
           name: toolName,
           status: 'completed',
-          summary:
-            event.data.result?.detailedContent ??
-            event.data.result?.content ??
-            (event.data.success ? 'Tool execution completed.' : 'Tool execution failed.'),
         })
       }
     })
@@ -135,10 +131,12 @@ You are an email editor for a solution architect.
 - Preserve the user's intent and any concrete commitments, dates, or asks unless the draft is ambiguous.
 - Keep the tone suitable for internal workplace communication unless the user asks otherwise.
 - If the original subject is weak or missing, suggest a better subject.
+- Honor the requested output format exactly.
 - Return the response using exactly these tags:
 <subject>single-line subject</subject>
 <email>full improved email body</email>
 <notes>short explanation of what changed, 1-3 bullets or one short paragraph</notes>
+<next_actions>optional bullet list of next actions, only when explicitly requested</next_actions>
 </operating_rules>
 `,
       },
@@ -148,6 +146,7 @@ You are an email editor for a solution architect.
       const response = await session.sendAndWait({
         prompt: [
           `Goal: ${request.goal?.trim() || 'Improve the structure, clarity, and content while keeping the intent.'}`,
+          `Output format: ${request.outputFormat?.trim() || 'full-reply'}`,
           request.subject?.trim() ? `Subject: ${request.subject.trim()}` : 'Subject: (none supplied)',
           request.incomingEmail?.trim()
             ? ['Incoming email for context:', request.incomingEmail.trim()].join('\n')
@@ -194,8 +193,10 @@ You are a notes operator for a solution architect's local PARA-style workspace.
 - Use \`search_notes\` before answering project, process, or research questions. It returns chunk-level citations.
 - Prefer the structured root-note tools for task capture, moving items between lists, and marking things done.
 - Prefer \`update_root_item\` when you need to add lightweight task metadata such as ticket IDs, links, people, or short context notes, or when updating a task before moving it.
+- \`update_root_item\` also supports optional due dates and follow-up dates for lightweight task tracking.
 - Prefer \`promote_inbox_item\` and \`defer_today_item\` for common list triage.
 - Prefer \`append_project_update\` and \`add_project_next_step\` for small project updates instead of rewriting full files.
+- If the user asks to roll back the most recent mutation, use \`undo_last_change\`.
 - ${config.trustedMode
             ? 'Trusted mode is enabled. You may use full-file note tools when the task genuinely requires them, but prefer structured tools first.'
             : 'Do not attempt arbitrary file reads or full-file rewrites. Use the structured tools and search results only.'}
@@ -290,10 +291,12 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           link: z.string().url().optional().describe('Optional related URL'),
           person: z.string().optional().describe('Optional person associated with the task'),
           context: z.string().optional().describe('Optional short context note, such as waiting on an email reply'),
+          due: z.string().optional().describe('Optional due date, for example 2026-03-20'),
+          followUpOn: z.string().optional().describe('Optional follow-up date, for example 2026-03-22'),
           moveTo: rootNoteSchema.optional().describe('Optional destination root note'),
         }),
-        handler: async ({ target, item, nextItem, ticket, link, person, context, moveTo }) =>
-          this.notes.updateRootItem(target, item, { nextItem, ticket, link, person, context, moveTo }),
+        handler: async ({ target, item, nextItem, ticket, link, person, context, due, followUpOn, moveTo }) =>
+          this.notes.updateRootItem(target, item, { nextItem, ticket, link, person, context, due, followUpOn, moveTo }),
       }),
       defineTool('promote_inbox_item', {
         description: 'Move an item from INBOX.md to TODAY.md.',
@@ -308,6 +311,10 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           item: z.string().min(2).describe('Task text to defer'),
         }),
         handler: async ({ item }) => this.notes.deferTodayItemToWaiting(item),
+      }),
+      defineTool('undo_last_change', {
+        description: 'Undo the most recent note mutation.',
+        handler: async () => this.notes.undoLastChange(),
       }),
       defineTool('append_project_update', {
         description: 'Append a dated update entry to a project note, usually status.md.',
@@ -378,11 +385,16 @@ function parseEmailAssistResponse(content: string, request: EmailAssistRequest) 
   const subject = extractTaggedSection(content, 'subject') || request.subject?.trim() || 'Suggested subject'
   const email = extractTaggedSection(content, 'email') || content.trim() || request.draft.trim()
   const notes = extractTaggedSection(content, 'notes') || 'Improved for clarity and flow.'
+  const nextActions = extractTaggedSection(content, 'next_actions')
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-*]\s*/, '').trim())
+    .filter((line) => line.length > 0)
 
   return {
     subject,
     email,
     notes,
+    ...(nextActions.length > 0 ? { nextActions } : {}),
   }
 }
 

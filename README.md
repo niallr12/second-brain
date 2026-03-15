@@ -40,6 +40,16 @@ There is also an explicit `Trusted mode` toggle in the workspace settings.
 
 This is meant to keep the default safe without making the app feel crippled. Turn it on only when you intentionally want broader chat-driven note editing.
 
+## Local-Only Mode
+
+There is also an explicit `Local-only mode` toggle in the workspace settings.
+
+- default: off
+- when off: chat and the email helper can use Copilot
+- when on: chat and the email helper are disabled, but local indexing, dashboard views, undo, and quick actions still work
+
+This gives you a strictly local session when you want one.
+
 ## Local Access Key
 
 On first backend start, the app creates a local access key unless `SECOND_BRAIN_ACCESS_KEY` is already set.
@@ -89,10 +99,13 @@ The frontend is a lightweight chat and dashboard UI. It lets the user:
 - inspect the current state of core notes
 - browse project summaries
 - run direct quick actions for capture, triage, completion, and project updates
+- undo the most recent note or project mutation
 - review recent changes made by the assistant or quick actions
+- run compact workflow shortcuts for common daily reviews
 - switch trusted mode on or off for broader chat access
+- switch local-only mode on or off to disable Copilot-backed features
 - submit chat prompts to the backend
-- improve rough email drafts on a separate route, optionally using the incoming email as context, without touching the Notes workspace
+- improve rough email drafts on a separate route, optionally using the incoming email as context, with output modes such as short reply, fuller reply, bullet summary, or reply plus next actions, without touching the Notes workspace
 
 ### Backend
 
@@ -110,6 +123,7 @@ The backend does the actual work:
 - exposes custom tools to the Copilot SDK
 - exposes a separate email rewrite endpoint backed by Copilot but isolated from note tools
 - performs safe scoped file writes inside the configured Notes root
+- keeps a lightweight local undo history for recent note mutations
 - enforces loopback-only API access and local access-key authentication
 
 ### AI Layer
@@ -134,11 +148,22 @@ It understands these conventions:
 - `INBOX.md`
 - `projects/<project-name>/**/*.md`
 
+Project notes can optionally include aliases in frontmatter:
+
+```yaml
+aliases:
+  - acme
+  - modernization
+```
+
+Those aliases are used to improve project lookup for search and project update actions.
+
 Each document is normalized into searchable metadata including:
 
 - relative path
 - title
 - project association
+- optional aliases from frontmatter
 - last modified timestamp
 - tokenized text for lexical retrieval
 
@@ -190,8 +215,9 @@ The backend focuses on structured operations:
 - add an item to `TODAY.md`, `WAITING.md`, or `INBOX.md`
 - move an item between root notes
 - mark a root-note item as done
-- update a root-note item with lightweight metadata such as `ticket`, `link`, `person`, or `context`
+- update a root-note item with lightweight metadata such as `ticket`, `link`, `person`, `context`, `due`, or `follow-up`
 - append a dated update to a project note
+- undo the most recent mutation when needed
 
 That is deliberate. It reduces the need for arbitrary full-file rewrites in chat mode.
 
@@ -219,6 +245,7 @@ The application assumes:
 - project folders may be free-form
 - headings improve summarization and append behavior
 - markdown checklist items are useful for actionable work
+- indented metadata lines under tasks are acceptable when you want to capture due dates, follow-up dates, people, links, or tickets
 
 Project folders do not need a strict schema, but the system works better when files use familiar names such as:
 
@@ -281,6 +308,9 @@ The current app has been exercised with:
 - restricted-mode chat verification
 - trusted-mode chat verification
 - end-to-end note mutation checks against a temporary Notes workspace
+- undo/history verification
+- local-only mode verification for `/api/chat` and `/api/email`
+- email helper verification with incoming-email context and `reply-with-next-actions` output
 
 The codebase is intended to be cross-platform. It uses Node path utilities rather than hard-coded POSIX paths for runtime file access, so the backend should work on macOS, Linux, and Windows. The main environment dependency to validate on a Windows machine is the GitHub Copilot SDK and CLI authentication flow, since that is external to the app itself.
 
@@ -301,8 +331,11 @@ The project currently provides:
 - a local Express backend
 - a scoped Notes retrieval and mutation layer
 - recent activity tracking for note changes
+- recent undo history for automatic edits
 - direct quick-action workflows for common daily operations
+- lightweight workflow shortcuts for chat reviews
 - a Copilot-backed chat flow
+- a dedicated email helper route with contextual draft improvement
 - end-to-end support for dashboard questions and common note-management tasks
 
 For agent-focused build and run instructions, see `AGENTS.md`.

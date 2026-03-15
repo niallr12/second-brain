@@ -8,12 +8,14 @@ export interface AppConfig {
   notesPath: string
   model: string
   trustedMode: boolean
+  localOnlyMode: boolean
 }
 
 const defaultConfig = (): AppConfig => ({
   notesPath: path.join(process.cwd(), 'sample-data', 'Notes'),
   model: 'gpt-5',
   trustedMode: false,
+  localOnlyMode: false,
 })
 
 export class ConfigStore {
@@ -25,6 +27,7 @@ export class ConfigStore {
         notesPath: parsed.notesPath ?? defaultConfig().notesPath,
         model: parsed.model ?? defaultConfig().model,
         trustedMode: parsed.trustedMode ?? defaultConfig().trustedMode,
+        localOnlyMode: parsed.localOnlyMode ?? defaultConfig().localOnlyMode,
       }
     } catch {
       const config = defaultConfig()

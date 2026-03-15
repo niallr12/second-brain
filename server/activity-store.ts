@@ -8,7 +8,7 @@ const MAX_ACTIVITY_ITEMS = 50
 export interface ActivityEntry {
   id: string
   timestamp: string
-  kind: 'capture' | 'move' | 'complete' | 'project-update' | 'write' | 'config'
+  kind: 'capture' | 'move' | 'complete' | 'project-update' | 'write' | 'config' | 'undo'
   title: string
   detail: string
   paths: string[]

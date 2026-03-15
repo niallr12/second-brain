@@ -1,4 +1,4 @@
-import { access, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import matter from 'gray-matter'
@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type { AppConfig } from './config-store'
 import { ConfigStore } from './config-store'
 import { ActivityStore } from './activity-store'
+import { HistoryStore, type FileSnapshot } from './history-store'
 
 const ROOT_NOTE_NAMES = ['TODAY.md', 'WAITING.md', 'INBOX.md'] as const
 
@@ -21,6 +22,7 @@ const updateConfigSchema = z.object({
   notesPath: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   trustedMode: z.boolean().optional(),
+  localOnlyMode: z.boolean().optional(),
 })
 
 interface NoteDocument {
@@ -33,6 +35,7 @@ interface NoteDocument {
   rootNote: RootNoteName | null
   updatedAt: string
   tokens: string[]
+  aliases: string[]
 }
 
 interface NoteChunk {
@@ -54,6 +57,8 @@ interface RootNoteMetadata {
   link?: string
   person?: string
   context?: string
+  due?: string
+  followUpOn?: string
 }
 
 interface RootNoteItem {
@@ -78,6 +83,7 @@ interface ProjectSummary {
   fileCount: number
   lastUpdated: string | null
   highlights: string[]
+  aliases: string[]
 }
 
 interface WorkspaceHealth {
@@ -94,14 +100,16 @@ export type QuickActionRequest =
   | { type: 'promote-inbox-item'; item: string }
   | { type: 'defer-today-item'; item: string }
   | { type: 'mark-root-item-done'; target: RootNoteName; item: string }
-  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; moveTo?: RootNoteName }
+  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; due?: string; followUpOn?: string; moveTo?: RootNoteName }
   | { type: 'append-project-update'; project: string; update: string; fileName?: string; heading?: string }
   | { type: 'add-project-next-step'; project: string; item: string }
+  | { type: 'undo-last-change' }
 
 export class NotesService {
   private config!: AppConfig
   private readonly configStore = new ConfigStore()
   private readonly activityStore = new ActivityStore()
+  private readonly historyStore = new HistoryStore()
   private watcher: FSWatcher | null = null
   private watcherDebounceTimer: ReturnType<typeof setTimeout> | null = null
   private readonly pendingWatcherPaths = new Set<string>()
@@ -116,6 +124,7 @@ export class NotesService {
   async initialize(): Promise<void> {
     this.config = await this.configStore.load()
     await this.activityStore.initialize()
+    await this.historyStore.initialize()
     await this.ensureNotesPath()
     await this.ensureWorkspaceStructure()
     await this.reindex()
@@ -133,6 +142,7 @@ export class NotesService {
       notesPath: this.config.notesPath,
       model: this.config.model,
       trustedMode: this.config.trustedMode,
+      localOnlyMode: this.config.localOnlyMode,
       lastIndexedAt: this.lastIndexedAt,
       documentCount: this.documents.length,
       chunkCount: this.chunks.length,
@@ -149,13 +159,14 @@ export class NotesService {
 
     const model = next.model ?? this.config.model
     const trustedMode = next.trustedMode ?? this.config.trustedMode
+    const localOnlyMode = next.localOnlyMode ?? this.config.localOnlyMode
     const pathStats = await stat(notesPath).catch(() => null)
 
     if (!pathStats?.isDirectory()) {
       throw new Error(`Notes path does not exist: ${notesPath}`)
     }
 
-    this.config = { notesPath, model, trustedMode }
+    this.config = { notesPath, model, trustedMode, localOnlyMode }
     await this.configStore.save(this.config)
     await this.ensureWorkspaceStructure()
     await this.reindex()
@@ -163,7 +174,7 @@ export class NotesService {
     await this.activityStore.record({
       kind: 'config',
       title: 'Updated Notes workspace',
-      detail: `Notes path set to ${notesPath}; trusted mode ${trustedMode ? 'enabled' : 'disabled'}.`,
+      detail: `Notes path set to ${notesPath}; trusted mode ${trustedMode ? 'enabled' : 'disabled'}; local-only mode ${localOnlyMode ? 'enabled' : 'disabled'}.`,
       paths: [],
     })
 
@@ -176,11 +187,39 @@ export class NotesService {
       rootNotes: ROOT_NOTE_NAMES.map((fileName) => this.getRootNoteCard(fileName)),
       projects: this.getProjectSummaries(),
       recentActivity: this.activityStore.list(),
+      recentHistory: this.getHistory(),
+      lastUndo: this.getLastUndoSummary(),
     }
   }
 
   getRecentActivity() {
     return this.activityStore.list()
+  }
+
+  getHistory() {
+    return this.historyStore.list().map((entry) => ({
+      id: entry.id,
+      timestamp: entry.timestamp,
+      title: entry.title,
+      detail: entry.detail,
+      paths: entry.paths,
+    }))
+  }
+
+  getLastUndoSummary() {
+    const entry = this.historyStore.peek()
+
+    if (!entry) {
+      return null
+    }
+
+    return {
+      id: entry.id,
+      timestamp: entry.timestamp,
+      title: entry.title,
+      detail: entry.detail,
+      paths: entry.paths,
+    }
   }
 
   getOverviewForAssistant() {
@@ -210,6 +249,7 @@ export class NotesService {
   search(query: string, limit = 5) {
     const normalizedLimit = Math.max(1, Math.min(limit, 10))
     const queryTokens = tokenize(query)
+    const matchedProjects = this.resolveProjectsForQuery(query)
 
     if (queryTokens.length === 0) {
       return []
@@ -218,7 +258,7 @@ export class NotesService {
     return this.chunks
       .map((chunk) => ({
         chunk,
-        score: scoreChunk(chunk, queryTokens),
+        score: scoreChunk(chunk, queryTokens, matchedProjects),
       }))
       .filter((entry) => entry.score > 0)
       .sort((left, right) => right.score - left.score)
@@ -237,7 +277,7 @@ export class NotesService {
   }
 
   listProjectFiles(projectName: string) {
-    const normalizedProject = slugify(projectName)
+    const normalizedProject = this.resolveProjectName(projectName)
     return this.documents
       .filter((document) => document.project === normalizedProject)
       .map((document) => ({
@@ -245,6 +285,40 @@ export class NotesService {
         title: document.title,
         updatedAt: document.updatedAt,
       }))
+  }
+
+  async undoLastChange() {
+    const entry = await this.historyStore.shift()
+
+    if (!entry) {
+      throw new Error('There is no recent change to undo.')
+    }
+
+    for (const snapshot of entry.snapshots) {
+      const absolutePath = this.resolveNotePath(snapshot.path)
+
+      if (!snapshot.existed) {
+        await unlink(absolutePath).catch(() => undefined)
+        continue
+      }
+
+      await mkdir(path.dirname(absolutePath), { recursive: true })
+      await writeFile(absolutePath, snapshot.content, 'utf8')
+    }
+
+    await this.refreshIndexedPaths(entry.snapshots.map((snapshot) => this.resolveNotePath(snapshot.path)))
+    await this.activityStore.record({
+      kind: 'undo',
+      title: `Undid: ${entry.title}`,
+      detail: entry.detail,
+      paths: entry.paths,
+    })
+
+    return {
+      restoredChangeId: entry.id,
+      title: entry.title,
+      paths: entry.paths,
+    }
   }
 
   async readNote(relativePath: string) {
@@ -258,6 +332,11 @@ export class NotesService {
 
   async writeNote(relativePath: string, content: string) {
     const absolutePath = this.resolveNotePath(relativePath)
+    await this.recordHistorySnapshot(
+      `Replaced ${this.toRelativePath(absolutePath)}`,
+      'Full note content was replaced.',
+      [absolutePath],
+    )
     await mkdir(path.dirname(absolutePath), { recursive: true })
     await writeFile(absolutePath, content, 'utf8')
     await this.refreshIndexedPaths([absolutePath])
@@ -280,6 +359,11 @@ export class NotesService {
     const separator = existing.endsWith('\n') || existing.length === 0 ? '' : '\n'
     const nextContent = `${existing}${separator}${content}\n`
 
+    await this.recordHistorySnapshot(
+      `Appended to ${this.toRelativePath(absolutePath)}`,
+      createActivityDetail(content),
+      [absolutePath],
+    )
     await mkdir(path.dirname(absolutePath), { recursive: true })
     await writeFile(absolutePath, nextContent, 'utf8')
     await this.refreshIndexedPaths([absolutePath])
@@ -321,6 +405,11 @@ export class NotesService {
       createRootNoteTemplate(noteName),
     )
 
+    await this.recordHistorySnapshot(
+      `Captured item in ${noteName}`,
+      item,
+      [absolutePath],
+    )
     await writeFile(absolutePath, serializeLines(nextLines), 'utf8')
     await this.refreshIndexedPaths([absolutePath])
     await this.activityStore.record({
@@ -352,6 +441,11 @@ export class NotesService {
 
     const sourceBlock = sourceBlocks[sourceIndex]
     const itemText = sourceBlock.item.text
+    await this.recordHistorySnapshot(
+      `Moved item from ${from} to ${to}`,
+      itemText,
+      [sourcePath, destinationPath],
+    )
     sourceLines.splice(sourceBlock.start, sourceBlock.end - sourceBlock.start)
 
     if (findRootItemBlockIndex(destinationBlocks, itemText) === -1) {
@@ -395,6 +489,11 @@ export class NotesService {
 
     const block = blocks[index]
     const itemText = block.item.text
+    await this.recordHistorySnapshot(
+      `Completed item in ${noteName}`,
+      itemText,
+      [absolutePath],
+    )
     lines.splice(
       block.start,
       block.end - block.start,
@@ -429,6 +528,8 @@ export class NotesService {
       link?: string
       person?: string
       context?: string
+      due?: string
+      followUpOn?: string
       moveTo?: RootNoteName
     },
   ) {
@@ -451,11 +552,18 @@ export class NotesService {
         ...(patch.link !== undefined ? { link: patch.link } : {}),
         ...(patch.person !== undefined ? { person: patch.person } : {}),
         ...(patch.context !== undefined ? { context: patch.context } : {}),
+        ...(patch.due !== undefined ? { due: patch.due } : {}),
+        ...(patch.followUpOn !== undefined ? { followUpOn: patch.followUpOn } : {}),
       }),
     }
     const destinationNote = patch.moveTo ?? noteName
 
     if (destinationNote === noteName) {
+      await this.recordHistorySnapshot(
+        `Updated item in ${noteName}`,
+        nextItem.text,
+        [sourcePath],
+      )
       sourceLines.splice(
         sourceBlock.start,
         sourceBlock.end - sourceBlock.start,
@@ -482,6 +590,11 @@ export class NotesService {
     const destinationLines = await readNoteLines(destinationPath)
     const destinationBlocks = parseRootNoteBlocks(destinationLines)
 
+    await this.recordHistorySnapshot(
+      `Updated item from ${noteName} to ${destinationNote}`,
+      nextItem.text,
+      [sourcePath, destinationPath],
+    )
     sourceLines.splice(sourceBlock.start, sourceBlock.end - sourceBlock.start)
 
     if (findRootItemBlockIndex(destinationBlocks, nextItem.text) === -1) {
@@ -519,16 +632,21 @@ export class NotesService {
     fileName = 'status.md',
     heading = 'Updates',
   ) {
-    const safeProject = slugify(project)
+    const safeProject = this.resolveProjectName(project)
     const safeFileName = sanitizeProjectFileName(fileName)
     const relativePath = `projects/${safeProject}/${safeFileName}`
     const absolutePath = this.resolveNotePath(relativePath)
     const existing = await readFile(absolutePath, 'utf8').catch(() =>
-      createProjectNoteTemplate(project, safeFileName),
+      createProjectNoteTemplate(safeProject, safeFileName),
     )
     const datedUpdate = `- ${new Date().toISOString().slice(0, 10)}: ${update.trim()}`
     const nextContent = appendUnderHeading(existing, heading, datedUpdate)
 
+    await this.recordHistorySnapshot(
+      `Updated project ${safeProject}`,
+      update.trim(),
+      [absolutePath],
+    )
     await mkdir(path.dirname(absolutePath), { recursive: true })
     await writeFile(absolutePath, ensureTrailingNewline(nextContent), 'utf8')
     await this.refreshIndexedPaths([absolutePath])
@@ -577,6 +695,8 @@ export class NotesService {
           link: action.link,
           person: action.person,
           context: action.context,
+          due: action.due,
+          followUpOn: action.followUpOn,
           moveTo: action.moveTo,
         })
       case 'append-project-update':
@@ -588,6 +708,8 @@ export class NotesService {
         )
       case 'add-project-next-step':
         return this.addProjectNextStep(action.project, action.item)
+      case 'undo-last-change':
+        return this.undoLastChange()
     }
   }
 
@@ -697,6 +819,7 @@ export class NotesService {
     const project = getProjectName(relativePath)
     const updatedAt = (fileStats ?? (await stat(absolutePath))).mtime.toISOString()
     const title = deriveTitle(relativePath, parsed.content)
+    const aliases = parseAliases(parsed.data)
 
     return {
       absolutePath,
@@ -707,7 +830,8 @@ export class NotesService {
       project,
       rootNote,
       updatedAt,
-      tokens: tokenize(`${relativePath} ${title} ${parsed.content}`),
+      tokens: tokenize(`${relativePath} ${title} ${aliases.join(' ')} ${parsed.content}`),
+      aliases,
     } satisfies NoteDocument
   }
 
@@ -816,16 +940,22 @@ export class NotesService {
     }
 
     return [...projectMap.entries()]
-      .map(([projectName, documents]) => ({
-        name: projectName,
-        fileCount: documents.length,
-        lastUpdated: documents
-          .map((document) => document.updatedAt)
-          .sort((left, right) => right.localeCompare(left))[0] ?? null,
-        highlights: documents
-          .slice(0, 3)
-          .map((document) => `${document.title}: ${document.excerpt}`),
-      }))
+      .map(([projectName, documents]) => {
+        const aliases = [...new Set(documents.flatMap((document) => document.aliases))]
+          .sort((left, right) => left.localeCompare(right))
+
+        return {
+          name: projectName,
+          fileCount: documents.length,
+          lastUpdated: documents
+            .map((document) => document.updatedAt)
+            .sort((left, right) => right.localeCompare(left))[0] ?? null,
+          highlights: documents
+            .slice(0, 3)
+            .map((document) => `${document.title}: ${document.excerpt}`),
+          aliases,
+        }
+      })
       .sort((left, right) => (right.lastUpdated ?? '').localeCompare(left.lastUpdated ?? ''))
   }
 
@@ -873,6 +1003,104 @@ export class NotesService {
   private toRelativePath(absolutePath: string) {
     return path.relative(this.config.notesPath, absolutePath).split(path.sep).join('/')
   }
+
+  private async recordHistorySnapshot(title: string, detail: string, absolutePaths: string[]) {
+    const uniqueAbsolutePaths = [...new Set(absolutePaths.map((absolutePath) => path.resolve(absolutePath)))]
+    const snapshots: FileSnapshot[] = await Promise.all(
+      uniqueAbsolutePaths.map(async (absolutePath) => {
+        const content = await readFile(absolutePath, 'utf8').catch(() => null)
+        return {
+          path: this.toRelativePath(absolutePath),
+          existed: content !== null,
+          content: content ?? '',
+        }
+      }),
+    )
+
+    await this.historyStore.record({
+      title,
+      detail,
+      paths: snapshots.map((snapshot) => snapshot.path),
+      snapshots,
+    })
+  }
+
+  private getProjectAliasMap() {
+    const aliasMap = new Map<string, Set<string>>()
+
+    for (const document of this.documents) {
+      if (!document.project) {
+        continue
+      }
+
+      const aliases = aliasMap.get(document.project) ?? new Set<string>()
+      aliases.add(document.project)
+
+      for (const alias of document.aliases) {
+        aliases.add(alias)
+      }
+
+      for (const part of document.project.split('-').filter((value) => value.length >= 3)) {
+        aliases.add(part)
+      }
+
+      aliasMap.set(document.project, aliases)
+    }
+
+    return aliasMap
+  }
+
+  private resolveProjectName(projectName: string) {
+    const normalizedProject = slugify(projectName)
+
+    if (!normalizedProject) {
+      throw new Error('Project name is required.')
+    }
+
+    const projectNames = [...new Set(this.documents.flatMap((document) => (document.project ? [document.project] : [])))]
+
+    if (projectNames.includes(normalizedProject)) {
+      return normalizedProject
+    }
+
+    const aliasMap = this.getProjectAliasMap()
+
+    for (const [project, aliases] of aliasMap.entries()) {
+      if ([...aliases].some((alias) => slugify(alias) === normalizedProject)) {
+        return project
+      }
+    }
+
+    const partialMatches = projectNames.filter((project) => project.includes(normalizedProject))
+
+    if (partialMatches.length === 1) {
+      return partialMatches[0]
+    }
+
+    if (partialMatches.length > 1) {
+      throw new Error(`Project name "${projectName}" matched multiple projects: ${partialMatches.join(', ')}`)
+    }
+
+    return normalizedProject
+  }
+
+  private resolveProjectsForQuery(query: string) {
+    const normalizedQuery = slugify(query).replace(/-/g, ' ')
+    const matchedProjects = new Set<string>()
+
+    for (const [project, aliases] of this.getProjectAliasMap().entries()) {
+      for (const alias of aliases) {
+        const normalizedAlias = slugify(alias).replace(/-/g, ' ')
+
+        if (normalizedAlias.length >= 3 && normalizedQuery.includes(normalizedAlias)) {
+          matchedProjects.add(project)
+          break
+        }
+      }
+    }
+
+    return matchedProjects
+  }
 }
 
 async function findMarkdownFiles(rootPath: string): Promise<string[]> {
@@ -919,6 +1147,26 @@ function getProjectName(relativePath: string) {
   return slugify(parts[projectsIndex + 1])
 }
 
+function parseAliases(frontmatter: unknown) {
+  const rawAliases = typeof frontmatter === 'object' && frontmatter !== null
+    ? (frontmatter as { aliases?: unknown }).aliases
+    : undefined
+
+  if (Array.isArray(rawAliases)) {
+    return [...new Set(
+      rawAliases.flatMap((alias) =>
+        typeof alias === 'string' && alias.trim().length > 0 ? [alias.trim()] : [],
+      ),
+    )]
+  }
+
+  if (typeof rawAliases === 'string' && rawAliases.trim().length > 0) {
+    return [rawAliases.trim()]
+  }
+
+  return []
+}
+
 function slugify(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, '-')
 }
@@ -930,7 +1178,7 @@ function tokenize(value: string) {
     .filter((token) => token.length >= 2)
 }
 
-function scoreChunk(chunk: NoteChunk, queryTokens: string[]) {
+function scoreChunk(chunk: NoteChunk, queryTokens: string[], matchedProjects: Set<string>) {
   let score = 0
   const title = chunk.documentTitle.toLowerCase()
   const sectionTitle = chunk.sectionTitle?.toLowerCase() ?? ''
@@ -969,6 +1217,10 @@ function scoreChunk(chunk: NoteChunk, queryTokens: string[]) {
 
   if (chunk.rootNote === 'INBOX.md' && queryTokens.some((token) => token === 'inbox')) {
     score += 8
+  }
+
+  if (chunk.project && matchedProjects.has(chunk.project)) {
+    score += 10
   }
 
   return score
@@ -1323,18 +1575,18 @@ function isRootNoteItemLine(line: string) {
 }
 
 function isRootNoteMetadataLine(line: string) {
-  return /^\s{2,}[-*]\s+(ticket|link|person|context):\s+.+$/i.test(line)
+  return /^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up):\s+.+$/i.test(line)
 }
 
 function parseRootNoteMetadataLine(line: string) {
-  const match = line.match(/^\s{2,}[-*]\s+(ticket|link|person|context):\s+(.+)$/i)
+  const match = line.match(/^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up):\s+(.+)$/i)
 
   if (!match) {
     return null
   }
 
   return {
-    key: match[1].toLowerCase() as keyof RootNoteMetadata,
+    key: (match[1].toLowerCase() === 'follow-up' ? 'followUpOn' : match[1].toLowerCase()) as keyof RootNoteMetadata,
     value: match[2].trim(),
   }
 }
@@ -1344,20 +1596,30 @@ function normalizeRootNoteMetadata(metadata: RootNoteMetadata): RootNoteMetadata
   const normalizedLink = normalizeRootNoteMetadataValue(metadata.link)
   const normalizedPerson = normalizeRootNoteMetadataValue(metadata.person)
   const normalizedContext = normalizeRootNoteMetadataValue(metadata.context)
+  const normalizedDue = normalizeRootNoteMetadataValue(metadata.due)
+  const normalizedFollowUpOn = normalizeRootNoteMetadataValue(metadata.followUpOn)
 
   return {
     ...(normalizedTicket ? { ticket: normalizedTicket } : {}),
     ...(normalizedLink ? { link: normalizedLink } : {}),
     ...(normalizedPerson ? { person: normalizedPerson } : {}),
     ...(normalizedContext ? { context: normalizedContext } : {}),
+    ...(normalizedDue ? { due: normalizedDue } : {}),
+    ...(normalizedFollowUpOn ? { followUpOn: normalizedFollowUpOn } : {}),
   }
 }
 
 function rootNoteMetadataEntries(metadata: RootNoteMetadata) {
-  return (['ticket', 'person', 'link', 'context'] as const)
+  return ([
+    ['ticket', metadata.ticket],
+    ['person', metadata.person],
+    ['link', metadata.link],
+    ['due', metadata.due],
+    ['follow-up', metadata.followUpOn],
+    ['context', metadata.context],
+  ] as const)
     .flatMap((key) => {
-      const value = metadata[key]
-      return value ? [[key, value] as const] : []
+      return key[1] ? [[key[0], key[1]] as const] : []
     })
 }
 

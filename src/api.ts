@@ -5,6 +5,7 @@ import type {
   ConfigResponse,
   DashboardResponse,
   EmailAssistResponse,
+  HistoryEntry,
   QuickActionRequest,
   QuickActionResponse,
 } from './types'
@@ -73,7 +74,7 @@ export function fetchConfig() {
   return request<ConfigResponse>('/api/config')
 }
 
-export function updateConfig(payload: { notesPath: string; trustedMode?: boolean }) {
+export function updateConfig(payload: { notesPath: string; trustedMode?: boolean; localOnlyMode?: boolean }) {
   return request<ConfigResponse>('/api/config', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -88,6 +89,10 @@ export function fetchActivity() {
   return request<{ items: ActivityEntry[] }>('/api/activity')
 }
 
+export function fetchHistory() {
+  return request<{ items: HistoryEntry[]; lastUndo: HistoryEntry | null }>('/api/history')
+}
+
 export function sendChat(payload: { prompt: string; sessionId?: string }) {
   return request<ChatResponse>('/api/chat', {
     method: 'POST',
@@ -95,10 +100,22 @@ export function sendChat(payload: { prompt: string; sessionId?: string }) {
   })
 }
 
-export function improveEmail(payload: { draft: string; subject?: string; goal?: string; incomingEmail?: string }) {
+export function improveEmail(payload: {
+  draft: string
+  subject?: string
+  goal?: string
+  incomingEmail?: string
+  outputFormat?: 'short-reply' | 'full-reply' | 'bullet-summary' | 'reply-with-next-actions'
+}) {
   return request<EmailAssistResponse>('/api/email', {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+}
+
+export function undoLastChange() {
+  return request<QuickActionResponse>('/api/undo', {
+    method: 'POST',
   })
 }
 

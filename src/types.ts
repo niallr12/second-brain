@@ -5,6 +5,8 @@ export interface RootNoteMetadata {
   link?: string
   person?: string
   context?: string
+  due?: string
+  followUpOn?: string
 }
 
 export interface RootNoteItem {
@@ -36,7 +38,15 @@ export interface WorkspaceHealth {
 export interface ActivityEntry {
   id: string
   timestamp: string
-  kind: 'capture' | 'move' | 'complete' | 'project-update' | 'write' | 'config'
+  kind: 'capture' | 'move' | 'complete' | 'project-update' | 'write' | 'config' | 'undo'
+  title: string
+  detail: string
+  paths: string[]
+}
+
+export interface HistoryEntry {
+  id: string
+  timestamp: string
   title: string
   detail: string
   paths: string[]
@@ -46,6 +56,7 @@ export interface ConfigResponse {
   notesPath: string
   model: string
   trustedMode: boolean
+  localOnlyMode: boolean
   lastIndexedAt: string | null
   documentCount: number
   chunkCount: number
@@ -71,6 +82,7 @@ export interface ProjectSummary {
   fileCount: number
   lastUpdated: string | null
   highlights: string[]
+  aliases: string[]
 }
 
 export interface DashboardResponse {
@@ -84,6 +96,8 @@ export interface DashboardResponse {
   rootNotes: RootNoteCard[]
   projects: ProjectSummary[]
   recentActivity: ActivityEntry[]
+  recentHistory: HistoryEntry[]
+  lastUndo: HistoryEntry | null
 }
 
 export interface ChatToolCall {
@@ -102,6 +116,7 @@ export interface EmailAssistResponse {
   subject: string
   email: string
   notes: string
+  nextActions?: string[]
 }
 
 export interface ChatMessage {
@@ -118,9 +133,10 @@ export type QuickActionRequest =
   | { type: 'promote-inbox-item'; item: string }
   | { type: 'defer-today-item'; item: string }
   | { type: 'mark-root-item-done'; target: RootNoteName; item: string }
-  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; moveTo?: RootNoteName }
+  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; due?: string; followUpOn?: string; moveTo?: RootNoteName }
   | { type: 'append-project-update'; project: string; update: string; fileName?: string; heading?: string }
   | { type: 'add-project-next-step'; project: string; item: string }
+  | { type: 'undo-last-change' }
 
 export interface QuickActionResponse {
   result: unknown

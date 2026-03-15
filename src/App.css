@@ -122,6 +122,30 @@
   border: 1px solid var(--border);
 }
 
+.workflow-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+}
+
+.workflow-chip {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  background: rgba(19, 26, 35, 0.94);
+  color: var(--ink);
+  padding: 0.5rem 0.8rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workflow-chip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .bottom-panels {
   display: grid;
   gap: 0.85rem;
@@ -193,6 +217,16 @@
   line-height: 1.5;
 }
 
+.email-next-actions {
+  margin: 0.55rem 0 0;
+  padding-left: 1rem;
+  color: var(--ink);
+}
+
+.email-next-actions li + li {
+  margin-top: 0.3rem;
+}
+
 .expandable-panel {
   border: 1px solid var(--border);
   border-radius: 20px;
@@ -231,6 +265,29 @@
   display: grid;
   gap: 0.75rem;
   margin-top: 0.9rem;
+}
+
+.undo-inline,
+.undo-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.85rem 0.95rem;
+  border-radius: 16px;
+  background: rgba(24, 31, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.undo-inline {
+  margin-top: 0.9rem;
+}
+
+.undo-inline p,
+.undo-banner p {
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  line-height: 1.4;
 }
 
 .compact-entry {
@@ -588,6 +645,12 @@
   font-size: 0.82rem;
 }
 
+.project-aliases {
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .activity-panel {
   max-height: 28rem;
 }
@@ -746,7 +809,9 @@
   .topbar,
   .minimal-topbar,
   .route-actions,
-  .composer-footer {
+  .composer-footer,
+  .undo-inline,
+  .undo-banner {
     flex-direction: column;
     align-items: stretch;
   }

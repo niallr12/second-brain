@@ -10,6 +10,7 @@ import {
   runQuickAction,
   sendChat,
   storeAccessKey,
+  undoLastChange,
   updateConfig,
   verifyAccessKey,
 } from './api'
@@ -31,6 +32,7 @@ type AppRoute = 'chat' | 'workspace' | 'email'
 type ChatPanelKey = 'recentActions' | 'currentTodos' | 'waiting'
 type ChatPanelState = Record<ChatPanelKey, boolean>
 type RowFeedbackState = Record<string, string>
+type EmailOutputFormat = 'short-reply' | 'full-reply' | 'bullet-summary' | 'reply-with-next-actions'
 
 interface TaskEditorState {
   rowKey: string
@@ -41,8 +43,25 @@ interface TaskEditorState {
   link: string
   person: string
   context: string
+  due: string
+  followUpOn: string
   moveTo: RootNoteName
 }
+
+const QUICK_WORKFLOWS = [
+  {
+    label: 'Prepare day',
+    prompt: 'Prepare my day. Summarize Today, call out anything urgent in Waiting, and suggest the best order to tackle the work.',
+  },
+  {
+    label: 'Waiting by person',
+    prompt: 'Summarize my waiting items grouped by person and highlight anything I should follow up on today.',
+  },
+  {
+    label: 'Stalled projects',
+    prompt: 'Which projects look stalled based on my notes, and what should I do next on each one?',
+  },
+] as const
 
 const CHAT_PANEL_STORAGE_KEY = 'second-brain.chat-panels'
 const DEFAULT_CHAT_PANEL_STATE: ChatPanelState = {
@@ -64,6 +83,7 @@ function App() {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
   const [notesPathInput, setNotesPathInput] = useState('')
   const [trustedModeInput, setTrustedModeInput] = useState(false)
+  const [localOnlyModeInput, setLocalOnlyModeInput] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sessionId, setSessionId] = useState<string>()
@@ -90,6 +110,7 @@ function App() {
   const [emailSubject, setEmailSubject] = useState('')
   const [incomingEmail, setIncomingEmail] = useState('')
   const [emailGoal, setEmailGoal] = useState('Improve the structure, clarity, and content while keeping the intent.')
+  const [emailOutputFormat, setEmailOutputFormat] = useState<EmailOutputFormat>('full-reply')
   const [emailDraft, setEmailDraft] = useState('')
   const [emailResult, setEmailResult] = useState<EmailAssistResponse | null>(null)
   const rowFeedbackTimers = useRef(new Map<string, number>())
@@ -180,6 +201,7 @@ function App() {
       setDashboard(nextDashboard)
       setNotesPathInput(nextConfig.notesPath)
       setTrustedModeInput(nextConfig.trustedMode)
+      setLocalOnlyModeInput(nextConfig.localOnlyMode)
       setError(null)
     } catch (caughtError) {
       if (caughtError instanceof ApiError && caughtError.status === 401) {
@@ -234,21 +256,21 @@ function App() {
     try {
       setLoadingState('config')
       const trustedModeChanged = config?.trustedMode !== trustedModeInput
+      const localOnlyModeChanged = config?.localOnlyMode !== localOnlyModeInput
       const nextConfig = await updateConfig({
         notesPath: notesPathInput,
         trustedMode: trustedModeInput,
+        localOnlyMode: localOnlyModeInput,
       })
       const nextDashboard = await fetchDashboard()
       setConfig(nextConfig)
       setDashboard(nextDashboard)
-      if (trustedModeChanged) {
+      if (trustedModeChanged || localOnlyModeChanged) {
         setSessionId(undefined)
         setMessages([])
       }
       setActionMessage(
-        trustedModeChanged
-          ? `Notes workspace updated. Trusted mode ${trustedModeInput ? 'enabled' : 'disabled'}.`
-          : 'Notes workspace updated.',
+        `Notes workspace updated.${trustedModeChanged ? ` Trusted mode ${trustedModeInput ? 'enabled' : 'disabled'}.` : ''}${localOnlyModeChanged ? ` Local-only mode ${localOnlyModeInput ? 'enabled' : 'disabled'}.` : ''}`,
       )
       setError(null)
     } catch (caughtError) {
@@ -269,7 +291,11 @@ function App() {
 
   async function handlePromptSubmission(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const trimmedPrompt = prompt.trim()
+    await submitPrompt(prompt)
+  }
+
+  async function submitPrompt(inputPrompt: string) {
+    const trimmedPrompt = inputPrompt.trim()
 
     if (!trimmedPrompt) {
       return
@@ -352,6 +378,43 @@ function App() {
     }
   }
 
+  async function handleUndoChange() {
+    try {
+      setLoadingState('action')
+      setActionMessage(null)
+      setError(null)
+      const response = await undoLastChange()
+      setDashboard(response.dashboard)
+      setActionMessage('Last change undone.')
+      setChatPanels((current) => ({
+        ...current,
+        recentActions: true,
+        currentTodos: true,
+        waiting: true,
+      }))
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'Unable to undo the last change.',
+      )
+    } finally {
+      setLoadingState(null)
+    }
+  }
+
+  async function handleWorkflowPrompt(workflowPrompt: string) {
+    if (config?.localOnlyMode) {
+      setError('Local-only mode is enabled. Disable it in workspace settings to use chat workflows.')
+      return
+    }
+
+    await submitPrompt(workflowPrompt)
+  }
+
   function navigate(nextRoute: AppRoute) {
     const nextHash =
       nextRoute === 'workspace' ? '#/workspace' : nextRoute === 'email' ? '#/email' : '#/'
@@ -405,8 +468,37 @@ function App() {
       link: item.metadata.link ?? '',
       person: item.metadata.person ?? '',
       context: item.metadata.context ?? '',
+      due: item.metadata.due ?? '',
+      followUpOn: item.metadata.followUpOn ?? '',
       moveTo: noteName,
     })
+  }
+
+  function prefillFollowUpEmail(item: RootNoteItem) {
+    const person = item.metadata.person?.trim()
+    const context = item.metadata.context?.trim()
+    const followUpOn = item.metadata.followUpOn?.trim()
+    const due = item.metadata.due?.trim()
+    const subjectSource = item.metadata.ticket?.trim() || item.text.trim()
+    const draftLines = [
+      person ? `Hi ${person},` : 'Hi,',
+      '',
+      `Just following up on ${item.text.trim().replace(/\.$/, '')}.`,
+      context ? context : null,
+      followUpOn ? `I had noted ${followUpOn} as a follow-up date.` : null,
+      due ? `If possible, it would help to have an update by ${due}.` : null,
+      '',
+      'Thanks,',
+    ].filter((line): line is string => Boolean(line))
+
+    setEmailSubject(`Follow-up: ${subjectSource}`)
+    setEmailGoal('Draft a concise follow-up email that is polite but clear about the ask.')
+    setEmailOutputFormat('full-reply')
+    setIncomingEmail(item.metadata.link ? `Reference link: ${item.metadata.link}` : '')
+    setEmailDraft(draftLines.join('\n'))
+    setEmailResult(null)
+    setActionMessage('Email helper prefilled from waiting item.')
+    navigate('email')
   }
 
   function closeTaskEditor() {
@@ -497,6 +589,8 @@ function App() {
         link: taskEditor.link,
         person: taskEditor.person,
         context: taskEditor.context,
+        due: taskEditor.due,
+        followUpOn: taskEditor.followUpOn,
         moveTo: taskEditor.moveTo === taskEditor.noteName ? undefined : taskEditor.moveTo,
       },
       taskEditor.moveTo === taskEditor.noteName
@@ -512,6 +606,11 @@ function App() {
   async function handleEmailAssist(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
+    if (config?.localOnlyMode) {
+      setError('Local-only mode is enabled. Disable it in workspace settings to use the email helper.')
+      return
+    }
+
     const draft = emailDraft.trim()
 
     if (!draft) {
@@ -526,6 +625,7 @@ function App() {
         subject: emailSubject.trim() || undefined,
         goal: emailGoal.trim() || undefined,
         incomingEmail: incomingEmail.trim() || undefined,
+        outputFormat: emailOutputFormat,
         draft,
       })
       setEmailResult(result)
@@ -549,7 +649,16 @@ function App() {
       return
     }
 
-    const payload = [`Subject: ${emailResult.subject}`, '', emailResult.email].join('\n')
+    const payload = [
+      `Subject: ${emailResult.subject}`,
+      '',
+      emailResult.email,
+      emailResult.nextActions?.length
+        ? ['', 'Next actions:', ...emailResult.nextActions.map((action) => `- ${action}`)].join('\n')
+        : null,
+    ]
+      .filter((value): value is string => value !== null)
+      .join('\n')
 
     try {
       await navigator.clipboard.writeText(payload)
@@ -639,6 +748,36 @@ function App() {
             placeholder="Waiting on a reply to the 15 March email"
           />
         </label>
+        <div className="field-row">
+          <label className="field">
+            <span>Due</span>
+            <input
+              type="date"
+              value={taskEditor.due}
+              onChange={(event) =>
+                setTaskEditor((current) =>
+                  current
+                    ? { ...current, due: event.target.value }
+                    : current,
+                )
+              }
+            />
+          </label>
+          <label className="field">
+            <span>Follow up</span>
+            <input
+              type="date"
+              value={taskEditor.followUpOn}
+              onChange={(event) =>
+                setTaskEditor((current) =>
+                  current
+                    ? { ...current, followUpOn: event.target.value }
+                    : current,
+                )
+              }
+            />
+          </label>
+        </div>
         <label className="field">
           <span>Move to</span>
           <select
@@ -678,6 +817,7 @@ function App() {
   const warnings = config?.health.warnings ?? dashboard?.health.warnings ?? []
   const showInstallButton = installPromptEvent !== null && !isInstalled
   const recentActions = dashboard?.recentActivity.slice(0, 6) ?? []
+  const lastUndo = dashboard?.lastUndo ?? null
   const rootNotes = dashboard?.rootNotes ?? []
   const actionableNotes = rootNotes.filter(
     (note) =>
@@ -685,6 +825,7 @@ function App() {
       note.fileName === 'INBOX.md',
   )
   const waitingNote = rootNotes.find((note) => note.fileName === 'WAITING.md')
+  const localOnlyModeEnabled = config?.localOnlyMode ?? false
 
   if (!authStatus?.authenticated) {
     return (
@@ -778,6 +919,19 @@ function App() {
                   <span>Trusted mode</span>
                   <p>
                     Lets chat use full-file note reads and writes. Keep this off for the safer default.
+                  </p>
+                </div>
+              </label>
+              <label className="toggle-field">
+                <input
+                  type="checkbox"
+                  checked={localOnlyModeInput}
+                  onChange={(event) => setLocalOnlyModeInput(event.target.checked)}
+                />
+                <div>
+                  <span>Local-only mode</span>
+                  <p>
+                    Disable Copilot-backed chat and email helper while keeping local note indexing and quick actions available.
                   </p>
                 </div>
               </label>
@@ -1063,6 +1217,22 @@ function App() {
                 <h2>Recent Activity</h2>
                 <span>{dashboard?.recentActivity.length ?? 0} entries</span>
               </div>
+              {lastUndo ? (
+                <div className="undo-banner">
+                  <div>
+                    <strong>{lastUndo.title}</strong>
+                    <p>{lastUndo.detail}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary-button compact-button"
+                    onClick={() => void handleUndoChange()}
+                    disabled={loadingState === 'action'}
+                  >
+                    Undo last change
+                  </button>
+                </div>
+              ) : null}
               <div className="activity-list">
                 {dashboard?.recentActivity.length ? (
                   dashboard.recentActivity.map((entry) => (
@@ -1106,6 +1276,9 @@ function App() {
                       <span>{project.fileCount} files</span>
                     </header>
                     <p>{project.highlights[0] ?? 'No highlights yet.'}</p>
+                    {project.aliases.length > 0 ? (
+                      <footer className="project-aliases">Aliases: {project.aliases.join(', ')}</footer>
+                    ) : null}
                   </article>
                 ))}
               </div>
@@ -1155,10 +1328,14 @@ function App() {
               </p>
             </div>
 
-            {!config?.copilot.ready ? (
+            {!config?.copilot.ready || localOnlyModeEnabled ? (
               <div className="subtle-banner">
-                <strong>Copilot setup needed</strong>
-                <p>{config?.copilot.message ?? 'Loading Copilot status.'}</p>
+                <strong>{localOnlyModeEnabled ? 'Local-only mode enabled' : 'Copilot setup needed'}</strong>
+                <p>
+                  {localOnlyModeEnabled
+                    ? 'Disable local-only mode in workspace settings to use the email helper.'
+                    : config?.copilot.message ?? 'Loading Copilot status.'}
+                </p>
               </div>
             ) : null}
 
@@ -1196,6 +1373,20 @@ function App() {
                   </select>
                 </label>
               </div>
+              <div className="field-row">
+                <label className="field">
+                  <span>Output</span>
+                  <select
+                    value={emailOutputFormat}
+                    onChange={(event) => setEmailOutputFormat(event.target.value as EmailOutputFormat)}
+                  >
+                    <option value="short-reply">Short reply</option>
+                    <option value="full-reply">Fuller reply</option>
+                    <option value="bullet-summary">Bullet summary</option>
+                    <option value="reply-with-next-actions">Reply and next actions</option>
+                  </select>
+                </label>
+              </div>
 
               <label className="field">
                 <span>Incoming email</span>
@@ -1218,7 +1409,7 @@ function App() {
               </label>
 
               <div className="email-helper-actions">
-                <button type="submit" className="primary-button compact-button" disabled={loadingState === 'email'}>
+                <button type="submit" className="primary-button compact-button" disabled={loadingState === 'email' || localOnlyModeEnabled}>
                   {loadingState === 'email' ? 'Improving…' : 'Improve email'}
                 </button>
                 {emailResult ? (
@@ -1253,6 +1444,16 @@ function App() {
                   <span className="email-result-label">What changed</span>
                   <p>{emailResult.notes}</p>
                 </div>
+                {emailResult.nextActions?.length ? (
+                  <div className="email-result-block">
+                    <span className="email-result-label">Next actions</span>
+                    <ul className="email-next-actions">
+                      {emailResult.nextActions.map((action) => (
+                        <li key={action}>{action}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="empty-copy email-helper-copy">
@@ -1303,10 +1504,18 @@ function App() {
             </p>
           </div>
 
-          {!config?.copilot.ready || warnings.length > 0 ? (
+          {!config?.copilot.ready || warnings.length > 0 || localOnlyModeEnabled ? (
             <div className="subtle-banner">
-              <strong>{config?.copilot.ready ? 'Workspace note' : 'Copilot setup needed'}</strong>
-              <p>{warnings[0] ?? config?.copilot.message ?? 'Loading workspace health.'}</p>
+              <strong>
+                {localOnlyModeEnabled
+                  ? 'Local-only mode enabled'
+                  : config?.copilot.ready ? 'Workspace note' : 'Copilot setup needed'}
+              </strong>
+              <p>
+                {localOnlyModeEnabled
+                  ? 'Chat is disabled while local-only mode is on. Quick actions and notes views still work.'
+                  : warnings[0] ?? config?.copilot.message ?? 'Loading workspace health.'}
+              </p>
             </div>
           ) : null}
 
@@ -1343,18 +1552,32 @@ function App() {
               onKeyDown={handlePromptKeyDown}
               placeholder="Ask what to work on today, add a task, update a project, or ask a general question."
               rows={3}
+              disabled={localOnlyModeEnabled}
             />
             <div className="composer-footer">
               <span>Notes are updated automatically through constrained tools.</span>
               <button
                 type="submit"
                 className="primary-button"
-                disabled={loadingState === 'chat'}
+                disabled={loadingState === 'chat' || localOnlyModeEnabled}
               >
                 {loadingState === 'chat' ? 'Sending…' : 'Send'}
               </button>
             </div>
           </form>
+          <div className="workflow-row">
+            {QUICK_WORKFLOWS.map((workflow) => (
+              <button
+                key={workflow.label}
+                type="button"
+                className="workflow-chip"
+                onClick={() => void handleWorkflowPrompt(workflow.prompt)}
+                disabled={loadingState === 'chat' || localOnlyModeEnabled}
+              >
+                {workflow.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="minimal-meta">
@@ -1362,6 +1585,7 @@ function App() {
           <span>{dashboard ? `${dashboard.chunkCount} chunks` : 'Loading chunks'}</span>
           <span>{dashboard ? `${dashboard.projectCount} projects` : 'Loading projects'}</span>
           <span>{config?.trustedMode ? 'Trusted mode on' : 'Trusted mode off'}</span>
+          <span>{localOnlyModeEnabled ? 'Local-only mode on' : 'Remote features on'}</span>
           <span>{config?.copilot.ready ? 'Copilot ready' : 'Copilot setup needed'}</span>
         </div>
 
@@ -1376,6 +1600,22 @@ function App() {
               <span>{recentActions.length} items</span>
             </summary>
             <div className="expandable-body">
+              {lastUndo ? (
+                <div className="undo-inline">
+                  <div>
+                    <strong>{lastUndo.title}</strong>
+                    <p>{lastUndo.detail}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="mini-action-button mini-action-button-secondary"
+                    onClick={() => void handleUndoChange()}
+                    disabled={loadingState === 'action'}
+                  >
+                    Undo
+                  </button>
+                </div>
+              ) : null}
               {recentActions.length > 0 ? (
                 <div className="compact-activity-list">
                   {recentActions.map((entry) => (
@@ -1555,6 +1795,14 @@ function App() {
                               <button
                                 type="button"
                                 className="mini-action-button mini-action-button-secondary"
+                                disabled={isPending || localOnlyModeEnabled}
+                                onClick={() => prefillFollowUpEmail(item)}
+                              >
+                                Draft follow-up
+                              </button>
+                              <button
+                                type="button"
+                                className="mini-action-button mini-action-button-secondary"
                                 disabled={isPending}
                                 onClick={() => {
                                   void handleInlineQuickAction(
@@ -1647,6 +1895,8 @@ function renderTaskMetadata(item: RootNoteItem) {
   const metadataBits = [
     item.metadata.ticket ? `Ticket: ${item.metadata.ticket}` : null,
     item.metadata.person ? `Person: ${item.metadata.person}` : null,
+    item.metadata.due ? `Due: ${item.metadata.due}` : null,
+    item.metadata.followUpOn ? `Follow up: ${item.metadata.followUpOn}` : null,
     item.metadata.context ? item.metadata.context : null,
     item.metadata.link ? item.metadata.link : null,
   ].filter((value): value is string => value !== null)
@@ -1776,6 +2026,14 @@ function getPanelsForAction(action: QuickActionRequest): Partial<ChatPanelState>
     return nextState
   }
 
+  if (action.type === 'undo-last-change') {
+    return {
+      ...nextState,
+      currentTodos: true,
+      waiting: true,
+    }
+  }
+
   return nextState
 }
 
@@ -1798,6 +2056,7 @@ function getPanelsForToolCalls(toolCalls: ChatToolCall[]): Partial<ChatPanelStat
     'update_root_item',
     'append_project_update',
     'add_project_next_step',
+    'undo_last_change',
     'write_note',
     'append_note',
   ])
@@ -1808,7 +2067,7 @@ function getPanelsForToolCalls(toolCalls: ChatToolCall[]): Partial<ChatPanelStat
 
   if (
     completedToolNames.some((toolName) =>
-      ['capture_root_item', 'move_root_item', 'mark_root_item_done', 'promote_inbox_item', 'defer_today_item', 'update_root_item'].includes(toolName),
+      ['capture_root_item', 'move_root_item', 'mark_root_item_done', 'promote_inbox_item', 'defer_today_item', 'update_root_item', 'undo_last_change'].includes(toolName),
     )
   ) {
     nextState.currentTodos = true
@@ -1816,7 +2075,7 @@ function getPanelsForToolCalls(toolCalls: ChatToolCall[]): Partial<ChatPanelStat
 
   if (
     completedToolNames.some((toolName) =>
-      ['move_root_item', 'defer_today_item', 'update_root_item'].includes(toolName),
+      ['move_root_item', 'defer_today_item', 'update_root_item', 'undo_last_change'].includes(toolName),
     )
   ) {
     nextState.waiting = true

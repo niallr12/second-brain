@@ -20,6 +20,7 @@ const emailAssistSchema = z.object({
   subject: z.string().optional(),
   goal: z.string().optional(),
   incomingEmail: z.string().optional(),
+  outputFormat: z.enum(['short-reply', 'full-reply', 'bullet-summary', 'reply-with-next-actions']).optional(),
 })
 
 app.use(express.json({ limit: '2mb' }))
@@ -138,6 +139,13 @@ app.get('/api/activity', (_request: Request, response: Response) => {
   })
 })
 
+app.get('/api/history', (_request: Request, response: Response) => {
+  response.json({
+    items: notesService.getHistory(),
+    lastUndo: notesService.getLastUndoSummary(),
+  })
+})
+
 app.post('/api/actions', async (request: Request, response: Response) => {
   try {
     const result = await notesService.runQuickAction(request.body)
@@ -152,7 +160,28 @@ app.post('/api/actions', async (request: Request, response: Response) => {
   }
 })
 
+app.post('/api/undo', async (_request: Request, response: Response) => {
+  try {
+    const result = await notesService.undoLastChange()
+    response.json({
+      result,
+      dashboard: notesService.getDashboard(),
+    })
+  } catch (error) {
+    response.status(400).json({
+      error: error instanceof Error ? error.message : 'Unable to undo the last change.',
+    })
+  }
+})
+
 app.post('/api/chat', async (request: Request, response: Response) => {
+  if (notesService.getConfig().localOnlyMode) {
+    response.status(409).json({
+      error: 'Local-only mode is enabled. Chat is currently disabled.',
+    })
+    return
+  }
+
   try {
     const result = await copilotService.chat(request.body)
     response.json(result)
@@ -167,6 +196,13 @@ app.post('/api/chat', async (request: Request, response: Response) => {
 })
 
 app.post('/api/email', async (request: Request, response: Response) => {
+  if (notesService.getConfig().localOnlyMode) {
+    response.status(409).json({
+      error: 'Local-only mode is enabled. The email helper is currently disabled.',
+    })
+    return
+  }
+
   try {
     const body = emailAssistSchema.parse(request.body)
     const result = await copilotService.improveEmail(body)

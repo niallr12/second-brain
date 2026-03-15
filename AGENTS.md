@@ -27,7 +27,7 @@ If you are an agent working in this repo, focus on:
 - GitHub Copilot authentication available on the machine if you need live chat to work
 
 The app can still build and load its dashboard without Copilot auth, but `/api/chat` will not work correctly without it.
-The email helper at `/api/email` also depends on Copilot auth and accepts an optional incoming email for context.
+The email helper at `/api/email` also depends on Copilot auth, accepts an optional incoming email for context, and supports multiple output formats.
 
 The backend is access-key protected. On first run it creates `.second-brain/auth.json` unless `SECOND_BRAIN_ACCESS_KEY` is already set.
 
@@ -104,10 +104,14 @@ curl -s http://127.0.0.1:8787/api/dashboard \
   -H 'x-second-brain-key: <ACCESS_KEY>'
 curl -s http://127.0.0.1:8787/api/activity \
   -H 'x-second-brain-key: <ACCESS_KEY>'
+curl -s http://127.0.0.1:8787/api/history \
+  -H 'x-second-brain-key: <ACCESS_KEY>'
 curl -s -X POST http://127.0.0.1:8787/api/email \
   -H 'Content-Type: application/json' \
   -H 'x-second-brain-key: <ACCESS_KEY>' \
-  -d '{"subject":"ALB follow-up","goal":"Make this clearer and shorter.","draft":"Hi team, just checking in on the ALB request because I wanted to see if there was any update and if not no worries but if there is anything needed from me let me know."}'
+  -d '{"subject":"ALB follow-up","goal":"Improve the structure, clarity, and content while keeping the intent.","incomingEmail":"Can you confirm status and blockers?","outputFormat":"reply-with-next-actions","draft":"Hi team, just checking in on the ALB request because I wanted to see if there was any update and if not no worries but if there is anything needed from me let me know."}'
+curl -s -X POST http://127.0.0.1:8787/api/undo \
+  -H 'x-second-brain-key: <ACCESS_KEY>'
 ```
 
 PowerShell equivalents:
@@ -126,6 +130,9 @@ Invoke-RestMethod `
   -Headers @{ 'x-second-brain-key' = '<ACCESS_KEY>' }
 Invoke-RestMethod `
   -Uri http://127.0.0.1:8787/api/activity `
+  -Headers @{ 'x-second-brain-key' = '<ACCESS_KEY>' }
+Invoke-RestMethod `
+  -Uri http://127.0.0.1:8787/api/history `
   -Headers @{ 'x-second-brain-key' = '<ACCESS_KEY>' }
 ```
 
@@ -155,6 +162,14 @@ To validate trusted mode specifically:
 2. Start a fresh chat session.
 3. Send a prompt that genuinely requires a full-file read, for example asking for the first heading of `projects/new-alb/request-process.md`.
 4. Confirm the chat tool trace includes `read_note`.
+
+To validate local-only mode specifically:
+
+1. Update config with `"localOnlyMode": true`.
+2. Confirm `/api/dashboard` still works.
+3. Confirm `/api/chat` returns `409`.
+4. Confirm `/api/email` returns `409`.
+5. Reset `"localOnlyMode": false` after the test.
 
 You can validate structured quick actions without chat:
 
@@ -192,6 +207,7 @@ Relevant config fields:
 - `notesPath`
 - `model`
 - `trustedMode`
+- `localOnlyMode`
 
 The configured Notes root is allowed to vary at runtime through the UI, but backend file operations must remain scoped to that root. Do not introduce code paths that read or write outside it.
 
@@ -200,6 +216,7 @@ Security constraints:
 - keep the API bound to loopback only
 - preserve access-key authentication for all protected routes
 - broad Copilot file tools are only allowed behind the explicit config-backed `trustedMode` toggle
+- keep `/api/chat` and `/api/email` blocked when `localOnlyMode` is enabled
 - remember that chat still sends selected note context to Copilot; local quick actions do not
 
 Validation guidance:
@@ -223,6 +240,7 @@ Windows notes:
 - `server/notes-service.ts`: indexing, chunked search, and mutations
 - `server/copilot-service.ts`: Copilot setup and tool registration
 - `.second-brain/activity.json`: persisted recent activity log
+- `.second-brain/history.json`: persisted undo snapshots for recent mutations
 - `sample-data/Notes/`: test corpus
 
 ## Agent expectations
