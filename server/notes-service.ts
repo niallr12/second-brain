@@ -48,6 +48,19 @@ interface NoteChunk {
   citation: string
 }
 
+interface RootNoteMetadata {
+  ticket?: string
+  link?: string
+  person?: string
+  context?: string
+}
+
+interface RootNoteItem {
+  text: string
+  done: boolean
+  metadata: RootNoteMetadata
+}
+
 interface RootNoteCard {
   fileName: RootNoteName
   label: string
@@ -55,6 +68,7 @@ interface RootNoteCard {
   preview: string
   lineCount: number
   taskCount: number
+  items: RootNoteItem[]
   updatedAt: string | null
 }
 
@@ -79,6 +93,7 @@ export type QuickActionRequest =
   | { type: 'promote-inbox-item'; item: string }
   | { type: 'defer-today-item'; item: string }
   | { type: 'mark-root-item-done'; target: RootNoteName; item: string }
+  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; moveTo?: RootNoteName }
   | { type: 'append-project-update'; project: string; update: string; fileName?: string; heading?: string }
   | { type: 'add-project-next-step'; project: string; item: string }
 
@@ -269,7 +284,10 @@ export class NotesService {
     const absolutePath = this.resolveNotePath(noteName)
     const lines = await readNoteLines(absolutePath)
 
-    if (findRootItemIndex(lines, item) !== -1) {
+    const blocks = parseRootNoteBlocks(lines)
+    const blockIndex = findRootItemBlockIndex(blocks, item)
+
+    if (blockIndex !== -1) {
       return {
         path: noteName,
         status: 'unchanged',
@@ -277,9 +295,13 @@ export class NotesService {
       }
     }
 
-    const nextLines = appendListLine(
+    const nextLines = appendRootNoteItemBlock(
       lines,
-      formatRootNoteItem(noteName, item, false),
+      serializeRootNoteItem(noteName, {
+        text: item,
+        done: false,
+        metadata: {},
+      }),
       createRootNoteTemplate(noteName),
     )
 
@@ -304,19 +326,25 @@ export class NotesService {
     const destinationPath = this.resolveNotePath(to)
     const sourceLines = await readNoteLines(sourcePath)
     const destinationLines = await readNoteLines(destinationPath)
-    const sourceIndex = findRootItemIndex(sourceLines, item)
+    const sourceBlocks = parseRootNoteBlocks(sourceLines)
+    const destinationBlocks = parseRootNoteBlocks(destinationLines)
+    const sourceIndex = findRootItemBlockIndex(sourceBlocks, item)
 
     if (sourceIndex === -1) {
       throw new Error(`Could not find "${item}" in ${from}`)
     }
 
-    const itemText = extractListText(sourceLines[sourceIndex]) ?? item
-    sourceLines.splice(sourceIndex, 1)
+    const sourceBlock = sourceBlocks[sourceIndex]
+    const itemText = sourceBlock.item.text
+    sourceLines.splice(sourceBlock.start, sourceBlock.end - sourceBlock.start)
 
-    if (findRootItemIndex(destinationLines, itemText) === -1) {
-      const nextDestinationLines = appendListLine(
+    if (findRootItemBlockIndex(destinationBlocks, itemText) === -1) {
+      const nextDestinationLines = appendRootNoteItemBlock(
         destinationLines,
-        formatRootNoteItem(to, itemText, false),
+        serializeRootNoteItem(to, {
+          ...sourceBlock.item,
+          done: false,
+        }),
         createRootNoteTemplate(to),
       )
       await writeFile(destinationPath, serializeLines(nextDestinationLines), 'utf8')
@@ -342,14 +370,23 @@ export class NotesService {
   async markRootItemDone(noteName: RootNoteName, item: string) {
     const absolutePath = this.resolveNotePath(noteName)
     const lines = await readNoteLines(absolutePath)
-    const index = findRootItemIndex(lines, item)
+    const blocks = parseRootNoteBlocks(lines)
+    const index = findRootItemBlockIndex(blocks, item)
 
     if (index === -1) {
       throw new Error(`Could not find "${item}" in ${noteName}`)
     }
 
-    const itemText = extractListText(lines[index]) ?? item
-    lines[index] = formatRootNoteItem(noteName, itemText, true)
+    const block = blocks[index]
+    const itemText = block.item.text
+    lines.splice(
+      block.start,
+      block.end - block.start,
+      ...serializeRootNoteItem(noteName, {
+        ...block.item,
+        done: true,
+      }),
+    )
 
     await writeFile(absolutePath, serializeLines(lines), 'utf8')
     await this.refreshIndexedPaths([absolutePath])
@@ -364,6 +401,99 @@ export class NotesService {
       path: noteName,
       item: itemText,
       status: 'done',
+    }
+  }
+
+  async updateRootItem(
+    noteName: RootNoteName,
+    item: string,
+    patch: {
+      nextItem?: string
+      ticket?: string
+      link?: string
+      person?: string
+      context?: string
+      moveTo?: RootNoteName
+    },
+  ) {
+    const sourcePath = this.resolveNotePath(noteName)
+    const sourceLines = await readNoteLines(sourcePath)
+    const sourceBlocks = parseRootNoteBlocks(sourceLines)
+    const sourceIndex = findRootItemBlockIndex(sourceBlocks, item)
+
+    if (sourceIndex === -1) {
+      throw new Error(`Could not find "${item}" in ${noteName}`)
+    }
+
+    const sourceBlock = sourceBlocks[sourceIndex]
+    const nextItem: RootNoteItem = {
+      ...sourceBlock.item,
+      text: patch.nextItem?.trim() || sourceBlock.item.text,
+      metadata: normalizeRootNoteMetadata({
+        ...sourceBlock.item.metadata,
+        ...(patch.ticket !== undefined ? { ticket: patch.ticket } : {}),
+        ...(patch.link !== undefined ? { link: patch.link } : {}),
+        ...(patch.person !== undefined ? { person: patch.person } : {}),
+        ...(patch.context !== undefined ? { context: patch.context } : {}),
+      }),
+    }
+    const destinationNote = patch.moveTo ?? noteName
+
+    if (destinationNote === noteName) {
+      sourceLines.splice(
+        sourceBlock.start,
+        sourceBlock.end - sourceBlock.start,
+        ...serializeRootNoteItem(noteName, nextItem),
+      )
+
+      await writeFile(sourcePath, serializeLines(sourceLines), 'utf8')
+      await this.refreshIndexedPaths([sourcePath])
+      await this.activityStore.record({
+        kind: 'write',
+        title: `Updated item in ${noteName}`,
+        detail: nextItem.text,
+        paths: [noteName],
+      })
+
+      return {
+        path: noteName,
+        item: nextItem.text,
+        status: 'updated',
+      }
+    }
+
+    const destinationPath = this.resolveNotePath(destinationNote)
+    const destinationLines = await readNoteLines(destinationPath)
+    const destinationBlocks = parseRootNoteBlocks(destinationLines)
+
+    sourceLines.splice(sourceBlock.start, sourceBlock.end - sourceBlock.start)
+
+    if (findRootItemBlockIndex(destinationBlocks, nextItem.text) === -1) {
+      const nextDestinationLines = appendRootNoteItemBlock(
+        destinationLines,
+        serializeRootNoteItem(destinationNote, {
+          ...nextItem,
+          done: false,
+        }),
+        createRootNoteTemplate(destinationNote),
+      )
+      await writeFile(destinationPath, serializeLines(nextDestinationLines), 'utf8')
+    }
+
+    await writeFile(sourcePath, serializeLines(trimTrailingBlankLines(sourceLines)), 'utf8')
+    await this.refreshIndexedPaths([sourcePath, destinationPath])
+    await this.activityStore.record({
+      kind: 'move',
+      title: `Updated item from ${noteName} to ${destinationNote}`,
+      detail: nextItem.text,
+      paths: [noteName, destinationNote],
+    })
+
+    return {
+      from: noteName,
+      to: destinationNote,
+      item: nextItem.text,
+      status: 'updated-and-moved',
     }
   }
 
@@ -424,6 +554,15 @@ export class NotesService {
         return this.deferTodayItemToWaiting(action.item)
       case 'mark-root-item-done':
         return this.markRootItemDone(action.target, action.item)
+      case 'update-root-item':
+        return this.updateRootItem(action.target, action.item, {
+          nextItem: action.nextItem,
+          ticket: action.ticket,
+          link: action.link,
+          person: action.person,
+          context: action.context,
+          moveTo: action.moveTo,
+        })
       case 'append-project-update':
         return this.appendProjectUpdate(
           action.project,
@@ -627,11 +766,13 @@ export class NotesService {
         preview: 'No content yet.',
         lineCount: 0,
         taskCount: 0,
+        items: [],
         updatedAt: null,
       }
     }
 
     const lines = document.content.split('\n').filter((line) => line.trim().length > 0)
+    const items = extractRootNoteItems(document.content)
 
     return {
       fileName,
@@ -639,7 +780,8 @@ export class NotesService {
       path: document.relativePath,
       preview: lines.slice(0, 4).join('\n'),
       lineCount: lines.length,
-      taskCount: lines.filter((line) => /^\s*[-*]\s+\[[ xX]\]/.test(line)).length,
+      taskCount: items.length,
+      items,
       updatedAt: document.updatedAt,
     }
   }
@@ -991,7 +1133,7 @@ function createRootNoteTemplate(noteName: RootNoteName) {
   return [`# ${ROOT_NOTE_LABELS[noteName]}`, '']
 }
 
-function appendListLine(lines: string[], line: string, fallbackTemplate: string[]) {
+function appendRootNoteItemBlock(lines: string[], blockLines: string[], fallbackTemplate: string[]) {
   const nextLines = lines.length > 1 || lines[0] !== '' ? [...lines] : [...fallbackTemplate]
 
   if (nextLines.length === 0) {
@@ -1002,7 +1144,7 @@ function appendListLine(lines: string[], line: string, fallbackTemplate: string[
     nextLines.push('')
   }
 
-  nextLines.push(line)
+  nextLines.push(...blockLines)
   return nextLines
 }
 
@@ -1036,12 +1178,25 @@ function extractListText(value: string) {
   return normalized.length > 0 ? normalized : null
 }
 
-function findRootItemIndex(lines: string[], item: string) {
+function extractRootNoteItems(content: string) {
+  return parseRootNoteBlocks(content.split('\n'))
+    .map((block) => block.item)
+    .filter((item) => !item.done)
+}
+
+function findRootItemBlockIndex(
+  blocks: Array<{
+    start: number
+    end: number
+    item: RootNoteItem
+  }>,
+  item: string,
+) {
   const normalizedQuery = normalizeListText(item)
   let partialMatch = -1
 
-  for (const [index, line] of lines.entries()) {
-    const normalizedLine = normalizeListText(line)
+  for (const [index, block] of blocks.entries()) {
+    const normalizedLine = normalizeListText(block.item.text)
 
     if (normalizedLine.length === 0) {
       continue
@@ -1071,6 +1226,127 @@ function formatRootNoteItem(noteName: RootNoteName, item: string, done: boolean)
   }
 
   return `- ${cleanItem}`
+}
+
+function serializeRootNoteItem(noteName: RootNoteName, item: RootNoteItem) {
+  const lines = [formatRootNoteItem(noteName, item.text, item.done)]
+
+  for (const [key, value] of rootNoteMetadataEntries(item.metadata)) {
+    lines.push(`  - ${key}: ${value}`)
+  }
+
+  return lines
+}
+
+function parseRootNoteBlocks(lines: string[]) {
+  const blocks: Array<{
+    start: number
+    end: number
+    item: RootNoteItem
+  }> = []
+  let index = 0
+
+  while (index < lines.length) {
+    const line = lines[index]
+
+    if (!isRootNoteItemLine(line)) {
+      index += 1
+      continue
+    }
+
+    const text = extractListText(line)
+
+    if (!text) {
+      index += 1
+      continue
+    }
+
+    const metadata: RootNoteMetadata = {}
+    let end = index + 1
+
+    while (end < lines.length) {
+      const nextLine = lines[end]
+
+      if (isRootNoteMetadataLine(nextLine)) {
+        const metadataEntry = parseRootNoteMetadataLine(nextLine)
+
+        if (metadataEntry) {
+          metadata[metadataEntry.key] = metadataEntry.value
+        }
+
+        end += 1
+        continue
+      }
+
+      if (nextLine.trim() === '') {
+        end += 1
+        continue
+      }
+
+      break
+    }
+
+    blocks.push({
+      start: index,
+      end,
+      item: {
+        text,
+        done: /^\s*[-*]\s+\[[xX]\]\s+/.test(line),
+        metadata: normalizeRootNoteMetadata(metadata),
+      },
+    })
+
+    index = end
+  }
+
+  return blocks
+}
+
+function isRootNoteItemLine(line: string) {
+  return /^\s*[-*]\s+(\[[ xX]\]\s+)?\S+/.test(line)
+}
+
+function isRootNoteMetadataLine(line: string) {
+  return /^\s{2,}[-*]\s+(ticket|link|person|context):\s+.+$/i.test(line)
+}
+
+function parseRootNoteMetadataLine(line: string) {
+  const match = line.match(/^\s{2,}[-*]\s+(ticket|link|person|context):\s+(.+)$/i)
+
+  if (!match) {
+    return null
+  }
+
+  return {
+    key: match[1].toLowerCase() as keyof RootNoteMetadata,
+    value: match[2].trim(),
+  }
+}
+
+function normalizeRootNoteMetadata(metadata: RootNoteMetadata): RootNoteMetadata {
+  const normalizedTicket = normalizeRootNoteMetadataValue(metadata.ticket)
+  const normalizedLink = normalizeRootNoteMetadataValue(metadata.link)
+  const normalizedPerson = normalizeRootNoteMetadataValue(metadata.person)
+  const normalizedContext = normalizeRootNoteMetadataValue(metadata.context)
+
+  return {
+    ...(normalizedTicket ? { ticket: normalizedTicket } : {}),
+    ...(normalizedLink ? { link: normalizedLink } : {}),
+    ...(normalizedPerson ? { person: normalizedPerson } : {}),
+    ...(normalizedContext ? { context: normalizedContext } : {}),
+  }
+}
+
+function rootNoteMetadataEntries(metadata: RootNoteMetadata) {
+  return (['ticket', 'person', 'link', 'context'] as const)
+    .flatMap((key) => {
+      const value = metadata[key]
+      return value ? [[key, value] as const] : []
+    })
+}
+
+function normalizeRootNoteMetadataValue(value?: string) {
+  return value?.replace(/\s+/g, ' ').trim() ?? ''
 }
 
 function sanitizeProjectFileName(fileName: string) {

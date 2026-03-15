@@ -126,6 +126,7 @@ You are a notes operator for a solution architect's local PARA-style workspace.
 - Use \`search_notes\` before answering project, process, or research questions. It returns chunk-level citations.
 - Use \`read_note\` before quoting or summarizing a specific file.
 - Prefer the structured root-note tools for task capture, moving items between lists, and marking things done.
+- Prefer \`update_root_item\` when you need to add lightweight task metadata such as ticket IDs, links, people, or short context notes, or when updating a task before moving it.
 - Prefer \`promote_inbox_item\` and \`defer_today_item\` for common list triage.
 - Prefer \`append_project_update\` and \`add_project_next_step\` for small project updates instead of rewriting full files.
 - File updates are allowed automatically. Use \`write_note\` or \`append_note\` when the user asks you to update the Notes workspace.
@@ -224,6 +225,21 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           item: z.string().min(2).describe('Task text to mark as done'),
         }),
         handler: async ({ target, item }) => this.notes.markRootItemDone(target, item),
+      }),
+      defineTool('update_root_item', {
+        description: 'Update a root-note task with lightweight metadata such as a ticket ID, link, person, or short context note, and optionally move it to another root note.',
+        parameters: z.object({
+          target: rootNoteSchema.describe('Which root note currently contains the item'),
+          item: z.string().min(2).describe('Current task text to update'),
+          nextItem: z.string().min(2).optional().describe('Optional replacement task text'),
+          ticket: z.string().optional().describe('Optional ticket or issue identifier'),
+          link: z.string().url().optional().describe('Optional related URL'),
+          person: z.string().optional().describe('Optional person associated with the task'),
+          context: z.string().optional().describe('Optional short context note, such as waiting on an email reply'),
+          moveTo: rootNoteSchema.optional().describe('Optional destination root note'),
+        }),
+        handler: async ({ target, item, nextItem, ticket, link, person, context, moveTo }) =>
+          this.notes.updateRootItem(target, item, { nextItem, ticket, link, person, context, moveTo }),
       }),
       defineTool('promote_inbox_item', {
         description: 'Move an item from INBOX.md to TODAY.md.',

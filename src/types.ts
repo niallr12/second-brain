@@ -1,3 +1,18 @@
+export type RootNoteName = 'TODAY.md' | 'WAITING.md' | 'INBOX.md'
+
+export interface RootNoteMetadata {
+  ticket?: string
+  link?: string
+  person?: string
+  context?: string
+}
+
+export interface RootNoteItem {
+  text: string
+  done: boolean
+  metadata: RootNoteMetadata
+}
+
 export interface CopilotStatus {
   ready: boolean
   message: string
@@ -32,12 +47,13 @@ export interface ConfigResponse {
 }
 
 export interface RootNoteCard {
-  fileName: string
+  fileName: RootNoteName
   label: string
   path: string
   preview: string
   lineCount: number
   taskCount: number
+  items: RootNoteItem[]
   updatedAt: string | null
 }
 
@@ -82,11 +98,12 @@ export interface ChatMessage {
 }
 
 export type QuickActionRequest =
-  | { type: 'capture-root-item'; target: 'TODAY.md' | 'WAITING.md' | 'INBOX.md'; item: string }
-  | { type: 'move-root-item'; from: 'TODAY.md' | 'WAITING.md' | 'INBOX.md'; to: 'TODAY.md' | 'WAITING.md' | 'INBOX.md'; item: string }
+  | { type: 'capture-root-item'; target: RootNoteName; item: string }
+  | { type: 'move-root-item'; from: RootNoteName; to: RootNoteName; item: string }
   | { type: 'promote-inbox-item'; item: string }
   | { type: 'defer-today-item'; item: string }
-  | { type: 'mark-root-item-done'; target: 'TODAY.md' | 'WAITING.md' | 'INBOX.md'; item: string }
+  | { type: 'mark-root-item-done'; target: RootNoteName; item: string }
+  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; moveTo?: RootNoteName }
   | { type: 'append-project-update'; project: string; update: string; fileName?: string; heading?: string }
   | { type: 'add-project-next-step'; project: string; item: string }
 
