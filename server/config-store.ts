@@ -7,11 +7,13 @@ const CONFIG_FILE = path.join(APP_STATE_DIR, 'config.json')
 export interface AppConfig {
   notesPath: string
   model: string
+  trustedMode: boolean
 }
 
 const defaultConfig = (): AppConfig => ({
   notesPath: path.join(process.cwd(), 'sample-data', 'Notes'),
   model: 'gpt-5',
+  trustedMode: false,
 })
 
 export class ConfigStore {
@@ -22,6 +24,7 @@ export class ConfigStore {
       return {
         notesPath: parsed.notesPath ?? defaultConfig().notesPath,
         model: parsed.model ?? defaultConfig().model,
+        trustedMode: parsed.trustedMode ?? defaultConfig().trustedMode,
       }
     } catch {
       const config = defaultConfig()

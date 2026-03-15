@@ -1,7 +1,19 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import './App.css'
-import { fetchConfig, fetchDashboard, runQuickAction, sendChat, updateConfig } from './api'
+import {
+  ApiError,
+  clearStoredAccessKey,
+  fetchAuthStatus,
+  fetchConfig,
+  fetchDashboard,
+  runQuickAction,
+  sendChat,
+  storeAccessKey,
+  updateConfig,
+  verifyAccessKey,
+} from './api'
 import type {
+  AuthStatus,
   ChatMessage,
   ChatToolCall,
   ConfigResponse,
@@ -44,9 +56,12 @@ interface BeforeInstallPromptEvent extends Event {
 
 function App() {
   const [route, setRoute] = useState<AppRoute>(getRoute())
+  const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
+  const [accessKeyInput, setAccessKeyInput] = useState('')
   const [config, setConfig] = useState<ConfigResponse | null>(null)
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
   const [notesPathInput, setNotesPathInput] = useState('')
+  const [trustedModeInput, setTrustedModeInput] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [sessionId, setSessionId] = useState<string>()
@@ -71,10 +86,6 @@ function App() {
   const [rowFeedback, setRowFeedback] = useState<RowFeedbackState>({})
   const [taskEditor, setTaskEditor] = useState<TaskEditorState | null>(null)
   const rowFeedbackTimers = useRef(new Map<string, number>())
-
-  useEffect(() => {
-    void boot()
-  }, [])
 
   useEffect(() => {
     const onHashChange = () => {
@@ -123,9 +134,32 @@ function App() {
     }
   }, [])
 
-  async function boot() {
+  const handleUnauthorized = useCallback(async (message: string) => {
+    clearStoredAccessKey()
+    const nextAuthStatus = await fetchAuthStatus().catch(() => null)
+    setAuthStatus(nextAuthStatus)
+    setConfig(null)
+    setDashboard(null)
+    setMessages([])
+    setSessionId(undefined)
+    setError(message)
+  }, [])
+
+  const boot = useCallback(async () => {
     try {
       setLoadingState('boot')
+      const nextAuthStatus = await fetchAuthStatus()
+      setAuthStatus(nextAuthStatus)
+
+      if (!nextAuthStatus.authenticated) {
+        setConfig(null)
+        setDashboard(null)
+        setMessages([])
+        setSessionId(undefined)
+        setError(null)
+        return
+      }
+
       const [nextConfig, nextDashboard] = await Promise.all([
         fetchConfig(),
         fetchDashboard(),
@@ -133,12 +167,53 @@ function App() {
       setConfig(nextConfig)
       setDashboard(nextDashboard)
       setNotesPathInput(nextConfig.notesPath)
+      setTrustedModeInput(nextConfig.trustedMode)
       setError(null)
     } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
       setError(caughtError instanceof Error ? caughtError.message : 'Unable to load the app.')
     } finally {
       setLoadingState(null)
     }
+  }, [handleUnauthorized])
+
+  useEffect(() => {
+    void boot()
+  }, [boot])
+
+  async function handleUnlock(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const accessKey = accessKeyInput.trim()
+
+    if (!accessKey) {
+      return
+    }
+
+    try {
+      setLoadingState('config')
+      const nextAuthStatus = await verifyAccessKey(accessKey)
+      storeAccessKey(accessKey)
+      setAuthStatus(nextAuthStatus)
+      setAccessKeyInput('')
+      await boot()
+    } catch (caughtError) {
+      clearStoredAccessKey()
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'Unable to verify the access key.',
+      )
+    } finally {
+      setLoadingState(null)
+    }
+  }
+
+  async function handleLock() {
+    clearStoredAccessKey()
+    setAccessKeyInput('')
+    await handleUnauthorized('The workspace has been locked locally.')
   }
 
   async function handleSaveConfig(event: FormEvent<HTMLFormElement>) {
@@ -146,13 +221,30 @@ function App() {
 
     try {
       setLoadingState('config')
-      const nextConfig = await updateConfig({ notesPath: notesPathInput })
+      const trustedModeChanged = config?.trustedMode !== trustedModeInput
+      const nextConfig = await updateConfig({
+        notesPath: notesPathInput,
+        trustedMode: trustedModeInput,
+      })
       const nextDashboard = await fetchDashboard()
       setConfig(nextConfig)
       setDashboard(nextDashboard)
-      setActionMessage('Notes workspace updated.')
+      if (trustedModeChanged) {
+        setSessionId(undefined)
+        setMessages([])
+      }
+      setActionMessage(
+        trustedModeChanged
+          ? `Notes workspace updated. Trusted mode ${trustedModeInput ? 'enabled' : 'disabled'}.`
+          : 'Notes workspace updated.',
+      )
       setError(null)
     } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
       setError(
         caughtError instanceof Error
           ? caughtError.message
@@ -200,6 +292,11 @@ function App() {
         ...getPanelsForToolCalls(response.toolCalls),
       }))
     } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
       const message =
         caughtError instanceof Error ? caughtError.message : 'Unable to send the prompt.'
       setMessages((current) => [
@@ -230,6 +327,11 @@ function App() {
         ...getPanelsForAction(action),
       }))
     } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
       setError(
         caughtError instanceof Error ? caughtError.message : 'The requested action failed.',
       )
@@ -313,6 +415,11 @@ function App() {
       }))
       queueRowFeedback(rowKey, feedbackLabel)
     } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
       setError(
         caughtError instanceof Error ? caughtError.message : 'The requested action failed.',
       )
@@ -508,6 +615,44 @@ function App() {
   )
   const waitingNote = rootNotes.find((note) => note.fileName === 'WAITING.md')
 
+  if (!authStatus?.authenticated) {
+    return (
+      <main className="minimal-shell auth-shell">
+        <header className="topbar minimal-topbar">
+          <div>
+            <p className="eyebrow">Second Brain</p>
+            <h1 className="topbar-title">Unlock</h1>
+          </div>
+        </header>
+
+        <section className="panel auth-panel">
+          <div className="minimal-intro">
+            <h2>Enter the local access key.</h2>
+            <p>{authStatus?.prompt ?? 'Checking authentication status.'}</p>
+          </div>
+
+          <form className="stack-form" onSubmit={handleUnlock}>
+            <label className="field">
+              <span>Access key</span>
+              <input
+                type="password"
+                value={accessKeyInput}
+                onChange={(event) => setAccessKeyInput(event.target.value)}
+                placeholder="Paste the local access key"
+                autoComplete="current-password"
+              />
+            </label>
+            <button type="submit" className="primary-button" disabled={loadingState === 'config'}>
+              {loadingState === 'config' ? 'Unlocking…' : 'Unlock'}
+            </button>
+          </form>
+
+          {error ? <div className="error-banner">{error}</div> : null}
+        </section>
+      </main>
+    )
+  }
+
   if (route === 'workspace') {
     return (
       <main className="shell workspace-shell">
@@ -522,6 +667,9 @@ function App() {
                 Install App
               </button>
             ) : null}
+            <button type="button" className="secondary-button" onClick={() => void handleLock()}>
+              Lock
+            </button>
             <button type="button" className="secondary-button" onClick={() => void boot()}>
               Refresh
             </button>
@@ -545,6 +693,19 @@ function App() {
                   onChange={(event) => setNotesPathInput(event.target.value)}
                   placeholder="~/Desktop/Notes"
                 />
+              </label>
+              <label className="toggle-field">
+                <input
+                  type="checkbox"
+                  checked={trustedModeInput}
+                  onChange={(event) => setTrustedModeInput(event.target.checked)}
+                />
+                <div>
+                  <span>Trusted mode</span>
+                  <p>
+                    Lets chat use full-file note reads and writes. Keep this off for the safer default.
+                  </p>
+                </div>
               </label>
               <button type="submit" className="primary-button">
                 Save path
@@ -897,6 +1058,9 @@ function App() {
               Install App
             </button>
           ) : null}
+          <button type="button" className="secondary-button" onClick={() => void handleLock()}>
+            Lock
+          </button>
           <button type="button" className="secondary-button" onClick={() => navigate('workspace')}>
             Workspace View
           </button>
@@ -971,6 +1135,7 @@ function App() {
           <span>{dashboard ? `${dashboard.documentCount} notes` : 'Loading notes'}</span>
           <span>{dashboard ? `${dashboard.chunkCount} chunks` : 'Loading chunks'}</span>
           <span>{dashboard ? `${dashboard.projectCount} projects` : 'Loading projects'}</span>
+          <span>{config?.trustedMode ? 'Trusted mode on' : 'Trusted mode off'}</span>
           <span>{config?.copilot.ready ? 'Copilot ready' : 'Copilot setup needed'}</span>
         </div>
 

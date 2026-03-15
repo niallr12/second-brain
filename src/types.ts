@@ -18,6 +18,13 @@ export interface CopilotStatus {
   message: string
 }
 
+export interface AuthStatus {
+  required: true
+  authenticated: boolean
+  keySource: 'env' | 'file'
+  prompt: string
+}
+
 export interface WorkspaceHealth {
   notesPathExists: boolean
   watcherEnabled: boolean
@@ -38,11 +45,13 @@ export interface ActivityEntry {
 export interface ConfigResponse {
   notesPath: string
   model: string
+  trustedMode: boolean
   lastIndexedAt: string | null
   documentCount: number
   chunkCount: number
   projectCount: number
   copilot: CopilotStatus
+  auth: AuthStatus
   health: WorkspaceHealth
 }
 

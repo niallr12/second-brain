@@ -1,4 +1,4 @@
-import { CopilotClient, approveAll, defineTool, type CopilotSession } from '@github/copilot-sdk'
+import { CopilotClient, defineTool, type CopilotSession, type PermissionHandler, type Tool } from '@github/copilot-sdk'
 import { z } from 'zod'
 import { NotesService } from './notes-service'
 
@@ -14,6 +14,17 @@ interface ToolCallLog {
 }
 
 const rootNoteSchema = z.enum(['TODAY.md', 'WAITING.md', 'INBOX.md'])
+const restrictPermissions: PermissionHandler = (request) => {
+  if (request.kind === 'custom-tool') {
+    return {
+      kind: 'approved',
+    }
+  }
+
+  return {
+    kind: 'denied-no-approval-rule-and-could-not-request-from-user',
+  }
+}
 
 export class CopilotService {
   private client: CopilotClient | null = null
@@ -107,13 +118,14 @@ export class CopilotService {
     }
 
     const client = await this.getClient()
-    const toolDefinitions = this.createTools()
+    const config = this.notes.getConfig()
+    const toolDefinitions = this.createTools(config.trustedMode)
     const sessionConfig = {
-      model: this.notes.getConfig().model,
-      workingDirectory: this.notes.getConfig().notesPath,
+      model: config.model,
+      workingDirectory: config.notesPath,
       tools: toolDefinitions,
       availableTools: toolDefinitions.map((tool) => tool.name),
-      onPermissionRequest: approveAll,
+      onPermissionRequest: restrictPermissions,
       systemMessage: {
         content: `
 <assistant_role>
@@ -124,12 +136,13 @@ You are a notes operator for a solution architect's local PARA-style workspace.
 - The Notes workspace is the source of truth. Use tools before making factual claims.
 - Use \`notes_overview\` for questions about today, waiting, inbox, or overall status.
 - Use \`search_notes\` before answering project, process, or research questions. It returns chunk-level citations.
-- Use \`read_note\` before quoting or summarizing a specific file.
 - Prefer the structured root-note tools for task capture, moving items between lists, and marking things done.
 - Prefer \`update_root_item\` when you need to add lightweight task metadata such as ticket IDs, links, people, or short context notes, or when updating a task before moving it.
 - Prefer \`promote_inbox_item\` and \`defer_today_item\` for common list triage.
 - Prefer \`append_project_update\` and \`add_project_next_step\` for small project updates instead of rewriting full files.
-- File updates are allowed automatically. Use \`write_note\` or \`append_note\` when the user asks you to update the Notes workspace.
+- ${config.trustedMode
+            ? 'Trusted mode is enabled. You may use full-file note tools when the task genuinely requires them, but prefer structured tools first.'
+            : 'Do not attempt arbitrary file reads or full-file rewrites. Use the structured tools and search results only.'}
 - Preserve existing structure where practical. For tasks, prefer Markdown checklists.
 - When \`search_notes\` returns relevant chunks, cite the chunk labels in the form \`path#section\` when available.
 - End answers with a short "Sources:" line that lists the chunk citations or relative note paths you used.
@@ -144,6 +157,14 @@ You are a notes operator for a solution architect's local PARA-style workspace.
 
     this.sessions.set(session.sessionId, session)
     return session
+  }
+
+  clearSessions() {
+    for (const session of this.sessions.values()) {
+      void session.disconnect().catch(() => undefined)
+    }
+
+    this.sessions.clear()
   }
 
   private async getClient() {
@@ -161,8 +182,8 @@ You are a notes operator for a solution architect's local PARA-style workspace.
     return client
   }
 
-  private createTools() {
-    return [
+  private createTools(trustedMode: boolean) {
+    const tools = [
       defineTool('notes_overview', {
         description: 'Get the current dashboard summary for Today, Waiting, Inbox, and project highlights.',
         handler: async () => this.notes.getOverviewForAssistant(),
@@ -177,29 +198,6 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           query,
           results: this.notes.search(query, limit),
         }),
-      }),
-      defineTool('read_note', {
-        description: 'Read a single markdown note from the Notes workspace.',
-        parameters: z.object({
-          path: z.string().describe('Path relative to the Notes workspace root'),
-        }),
-        handler: async ({ path }) => this.notes.readNote(path),
-      }),
-      defineTool('write_note', {
-        description: 'Replace the full contents of a markdown file in the Notes workspace.',
-        parameters: z.object({
-          path: z.string().describe('Path relative to the Notes workspace root'),
-          content: z.string().describe('Full markdown content to write'),
-        }),
-        handler: async ({ path, content }) => this.notes.writeNote(path, content),
-      }),
-      defineTool('append_note', {
-        description: 'Append markdown content to the end of a note in the Notes workspace.',
-        parameters: z.object({
-          path: z.string().describe('Path relative to the Notes workspace root'),
-          content: z.string().describe('Markdown content to append'),
-        }),
-        handler: async ({ path, content }) => this.notes.appendNote(path, content),
       }),
       defineTool('capture_root_item', {
         description: 'Add a new item to TODAY.md, WAITING.md, or INBOX.md without rewriting the full file.',
@@ -284,6 +282,38 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           files: this.notes.listProjectFiles(project),
         }),
       }),
-    ]
+    ] as Array<Tool<unknown>>
+
+    if (trustedMode) {
+      const trustedTools = [
+        defineTool('read_note', {
+          description: 'Read a single markdown note from the Notes workspace.',
+          parameters: z.object({
+            path: z.string().describe('Path relative to the Notes workspace root'),
+          }),
+          handler: async ({ path }) => this.notes.readNote(path),
+        }),
+        defineTool('write_note', {
+          description: 'Replace the full contents of a markdown file in the Notes workspace.',
+          parameters: z.object({
+            path: z.string().describe('Path relative to the Notes workspace root'),
+            content: z.string().describe('Full markdown content to write'),
+          }),
+          handler: async ({ path, content }) => this.notes.writeNote(path, content),
+        }),
+        defineTool('append_note', {
+          description: 'Append markdown content to the end of a note in the Notes workspace.',
+          parameters: z.object({
+            path: z.string().describe('Path relative to the Notes workspace root'),
+            content: z.string().describe('Markdown content to append'),
+          }),
+          handler: async ({ path, content }) => this.notes.appendNote(path, content),
+        }),
+      ] as Array<Tool<unknown>>
+
+      tools.splice(2, 0, ...trustedTools)
+    }
+
+    return tools
   }
 }

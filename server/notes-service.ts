@@ -20,6 +20,7 @@ const ROOT_NOTE_LABELS: Record<RootNoteName, string> = {
 const updateConfigSchema = z.object({
   notesPath: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
+  trustedMode: z.boolean().optional(),
 })
 
 interface NoteDocument {
@@ -131,6 +132,7 @@ export class NotesService {
     return {
       notesPath: this.config.notesPath,
       model: this.config.model,
+      trustedMode: this.config.trustedMode,
       lastIndexedAt: this.lastIndexedAt,
       documentCount: this.documents.length,
       chunkCount: this.chunks.length,
@@ -146,13 +148,14 @@ export class NotesService {
       : this.config.notesPath
 
     const model = next.model ?? this.config.model
+    const trustedMode = next.trustedMode ?? this.config.trustedMode
     const pathStats = await stat(notesPath).catch(() => null)
 
     if (!pathStats?.isDirectory()) {
       throw new Error(`Notes path does not exist: ${notesPath}`)
     }
 
-    this.config = { notesPath, model }
+    this.config = { notesPath, model, trustedMode }
     await this.configStore.save(this.config)
     await this.ensureWorkspaceStructure()
     await this.reindex()
@@ -160,7 +163,7 @@ export class NotesService {
     await this.activityStore.record({
       kind: 'config',
       title: 'Updated Notes workspace',
-      detail: `Notes path set to ${notesPath}`,
+      detail: `Notes path set to ${notesPath}; trusted mode ${trustedMode ? 'enabled' : 'disabled'}.`,
       paths: [],
     })
 
@@ -182,11 +185,24 @@ export class NotesService {
 
   getOverviewForAssistant() {
     return {
-      dashboard: this.getDashboard(),
-      rootFiles: ROOT_NOTE_NAMES.map((fileName) => ({
-        fileName,
-        label: ROOT_NOTE_LABELS[fileName],
-        content: this.documents.find((document) => document.rootNote === fileName)?.content ?? '',
+      indexedAt: this.lastIndexedAt,
+      rootNotes: ROOT_NOTE_NAMES.map((fileName) => {
+        const note = this.getRootNoteCard(fileName)
+        return {
+          fileName: note.fileName,
+          label: note.label,
+          preview: note.preview,
+          taskCount: note.taskCount,
+          items: note.items,
+          updatedAt: note.updatedAt,
+        }
+      }),
+      projects: this.getProjectSummaries(),
+      recentActivity: this.activityStore.list().map((entry) => ({
+        timestamp: entry.timestamp,
+        kind: entry.kind,
+        title: entry.title,
+        detail: entry.detail,
       })),
     }
   }
