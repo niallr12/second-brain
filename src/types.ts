@@ -98,6 +98,12 @@ export interface ChatResponse {
   toolCalls: ChatToolCall[]
 }
 
+export interface EmailAssistResponse {
+  subject: string
+  email: string
+  notes: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'

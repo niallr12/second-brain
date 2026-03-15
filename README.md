@@ -9,6 +9,7 @@ The intent is simple: instead of manually opening and editing note files, you as
 - How do I raise a request for a new ALB?
 - Move this item from waiting to today.
 - Add an update to a project status note.
+- Improve a rough internal email before sending it.
 
 The application reads and updates the Notes workspace automatically, but it does so through constrained tools rather than unrestricted shell access.
 
@@ -91,6 +92,7 @@ The frontend is a lightweight chat and dashboard UI. It lets the user:
 - review recent changes made by the assistant or quick actions
 - switch trusted mode on or off for broader chat access
 - submit chat prompts to the backend
+- improve rough email drafts on a separate route, optionally using the incoming email as context, without touching the Notes workspace
 
 ### Backend
 
@@ -106,6 +108,7 @@ The backend does the actual work:
 - indexes Markdown files from the Notes workspace
 - serves dashboard and configuration APIs
 - exposes custom tools to the Copilot SDK
+- exposes a separate email rewrite endpoint backed by Copilot but isolated from note tools
 - performs safe scoped file writes inside the configured Notes root
 - enforces loopback-only API access and local access-key authentication
 

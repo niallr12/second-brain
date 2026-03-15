@@ -15,6 +15,12 @@ const app = express()
 const authBodySchema = z.object({
   accessKey: z.string().min(1),
 })
+const emailAssistSchema = z.object({
+  draft: z.string().min(10),
+  subject: z.string().optional(),
+  goal: z.string().optional(),
+  incomingEmail: z.string().optional(),
+})
 
 app.use(express.json({ limit: '2mb' }))
 
@@ -156,6 +162,21 @@ app.post('/api/chat', async (request: Request, response: Response) => {
         error instanceof Error
           ? error.message
           : 'The Copilot request failed unexpectedly.',
+    })
+  }
+})
+
+app.post('/api/email', async (request: Request, response: Response) => {
+  try {
+    const body = emailAssistSchema.parse(request.body)
+    const result = await copilotService.improveEmail(body)
+    response.json(result)
+  } catch (error) {
+    response.status(error instanceof z.ZodError ? 400 : 500).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : 'The email helper request failed unexpectedly.',
     })
   }
 })

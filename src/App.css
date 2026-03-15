@@ -15,6 +15,10 @@
   max-width: 720px;
 }
 
+.email-shell {
+  width: min(1180px, calc(100vw - 2rem));
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;
@@ -60,7 +64,6 @@
 }
 
 .minimal-chat-panel {
-  min-height: calc(100vh - 12rem);
   display: flex;
   flex-direction: column;
 }
@@ -100,7 +103,7 @@
 
 .minimal-messages {
   flex: 1;
-  min-height: 20rem;
+  min-height: 0;
   max-height: none;
 }
 
@@ -122,6 +125,72 @@
 .bottom-panels {
   display: grid;
   gap: 0.85rem;
+}
+
+.email-route-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+}
+
+.email-route-panel {
+  min-height: calc(100vh - 12rem);
+}
+
+.email-route-intro {
+  margin-bottom: 1rem;
+}
+
+.email-route-form {
+  margin-top: 0;
+}
+
+.email-helper {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 0.9rem;
+}
+
+.email-helper-actions {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.email-helper-copy {
+  margin-top: 0.9rem;
+}
+
+.email-result {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.email-result-block {
+  padding: 0.85rem 0.95rem;
+  border-radius: 16px;
+  background: rgba(24, 31, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.email-result-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.email-result-block p,
+.email-result-block pre {
+  margin: 0.5rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
 }
 
 .expandable-panel {
@@ -651,6 +720,10 @@
     grid-template-columns: 1fr;
   }
 
+  .email-route-layout {
+    grid-template-columns: 1fr;
+  }
+
   .activity-panel {
     max-height: none;
   }
@@ -664,7 +737,8 @@
 @media (max-width: 640px) {
   .shell,
   .workspace-shell,
-  .minimal-shell {
+  .minimal-shell,
+  .email-shell {
     width: min(100vw - 1rem, 100%);
     padding-top: 1rem;
   }
@@ -678,7 +752,7 @@
   }
 
   .minimal-chat-panel {
-    min-height: calc(100vh - 8rem);
+    min-height: 0;
   }
 
   .field-row {

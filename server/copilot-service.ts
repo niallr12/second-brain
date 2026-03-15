@@ -7,6 +7,13 @@ interface ChatRequest {
   sessionId?: string
 }
 
+interface EmailAssistRequest {
+  draft: string
+  subject?: string
+  goal?: string
+  incomingEmail?: string
+}
+
 interface ToolCallLog {
   name: string
   status: 'started' | 'completed'
@@ -105,6 +112,55 @@ export class CopilotService {
       }
     } finally {
       off()
+    }
+  }
+
+  async improveEmail(request: EmailAssistRequest) {
+    const client = await this.getClient()
+    const config = this.notes.getConfig()
+    const session = await client.createSession({
+      model: config.model,
+      workingDirectory: config.notesPath,
+      tools: [],
+      availableTools: [],
+      onPermissionRequest: restrictPermissions,
+      systemMessage: {
+        content: `
+<assistant_role>
+You are an email editor for a solution architect.
+</assistant_role>
+
+<operating_rules>
+- Rewrite the email so it is clear, concise, professional, and ready to send.
+- Preserve the user's intent and any concrete commitments, dates, or asks unless the draft is ambiguous.
+- Keep the tone suitable for internal workplace communication unless the user asks otherwise.
+- If the original subject is weak or missing, suggest a better subject.
+- Return the response using exactly these tags:
+<subject>single-line subject</subject>
+<email>full improved email body</email>
+<notes>short explanation of what changed, 1-3 bullets or one short paragraph</notes>
+</operating_rules>
+`,
+      },
+    })
+
+    try {
+      const response = await session.sendAndWait({
+        prompt: [
+          `Goal: ${request.goal?.trim() || 'Improve the structure, clarity, and content while keeping the intent.'}`,
+          request.subject?.trim() ? `Subject: ${request.subject.trim()}` : 'Subject: (none supplied)',
+          request.incomingEmail?.trim()
+            ? ['Incoming email for context:', request.incomingEmail.trim()].join('\n')
+            : 'Incoming email for context: (none supplied)',
+          'Draft:',
+          request.draft.trim(),
+        ].join('\n\n'),
+      }, 120_000)
+
+      const content = response?.data.content ?? ''
+      return parseEmailAssistResponse(content, request)
+    } finally {
+      await session.disconnect().catch(() => undefined)
     }
   }
 
@@ -316,4 +372,22 @@ You are a notes operator for a solution architect's local PARA-style workspace.
 
     return tools
   }
+}
+
+function parseEmailAssistResponse(content: string, request: EmailAssistRequest) {
+  const subject = extractTaggedSection(content, 'subject') || request.subject?.trim() || 'Suggested subject'
+  const email = extractTaggedSection(content, 'email') || content.trim() || request.draft.trim()
+  const notes = extractTaggedSection(content, 'notes') || 'Improved for clarity and flow.'
+
+  return {
+    subject,
+    email,
+    notes,
+  }
+}
+
+function extractTaggedSection(content: string, tagName: string) {
+  const expression = new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`, 'i')
+  const match = content.match(expression)
+  return match?.[1]?.trim() || ''
 }

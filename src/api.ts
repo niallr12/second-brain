@@ -4,6 +4,7 @@ import type {
   ChatResponse,
   ConfigResponse,
   DashboardResponse,
+  EmailAssistResponse,
   QuickActionRequest,
   QuickActionResponse,
 } from './types'
@@ -89,6 +90,13 @@ export function fetchActivity() {
 
 export function sendChat(payload: { prompt: string; sessionId?: string }) {
   return request<ChatResponse>('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function improveEmail(payload: { draft: string; subject?: string; goal?: string; incomingEmail?: string }) {
+  return request<EmailAssistResponse>('/api/email', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

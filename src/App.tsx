@@ -6,6 +6,7 @@ import {
   fetchAuthStatus,
   fetchConfig,
   fetchDashboard,
+  improveEmail,
   runQuickAction,
   sendChat,
   storeAccessKey,
@@ -18,14 +19,15 @@ import type {
   ChatToolCall,
   ConfigResponse,
   DashboardResponse,
+  EmailAssistResponse,
   QuickActionRequest,
   RootNoteItem,
   RootNoteName,
   RootNoteCard,
 } from './types'
 
-type LoadingState = 'boot' | 'config' | 'chat' | 'action' | null
-type AppRoute = 'chat' | 'workspace'
+type LoadingState = 'boot' | 'config' | 'chat' | 'action' | 'email' | null
+type AppRoute = 'chat' | 'workspace' | 'email'
 type ChatPanelKey = 'recentActions' | 'currentTodos' | 'waiting'
 type ChatPanelState = Record<ChatPanelKey, boolean>
 type RowFeedbackState = Record<string, string>
@@ -55,7 +57,7 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 function App() {
-  const [route, setRoute] = useState<AppRoute>(getRoute())
+  const [route, setRoute] = useState<AppRoute>(() => getRouteFromHash(window.location.hash))
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null)
   const [accessKeyInput, setAccessKeyInput] = useState('')
   const [config, setConfig] = useState<ConfigResponse | null>(null)
@@ -85,11 +87,21 @@ function App() {
   const [pendingRowKeys, setPendingRowKeys] = useState<string[]>([])
   const [rowFeedback, setRowFeedback] = useState<RowFeedbackState>({})
   const [taskEditor, setTaskEditor] = useState<TaskEditorState | null>(null)
+  const [emailSubject, setEmailSubject] = useState('')
+  const [incomingEmail, setIncomingEmail] = useState('')
+  const [emailGoal, setEmailGoal] = useState('Improve the structure, clarity, and content while keeping the intent.')
+  const [emailDraft, setEmailDraft] = useState('')
+  const [emailResult, setEmailResult] = useState<EmailAssistResponse | null>(null)
   const rowFeedbackTimers = useRef(new Map<string, number>())
 
   useEffect(() => {
+    if (!window.location.hash) {
+      window.history.replaceState(null, '', '#/')
+      setRoute('chat')
+    }
+
     const onHashChange = () => {
-      setRoute(getRoute())
+      setRoute(getRouteFromHash(window.location.hash))
     }
 
     window.addEventListener('hashchange', onHashChange)
@@ -341,8 +353,16 @@ function App() {
   }
 
   function navigate(nextRoute: AppRoute) {
-    window.location.hash = nextRoute === 'workspace' ? '/workspace' : '/'
+    const nextHash =
+      nextRoute === 'workspace' ? '#/workspace' : nextRoute === 'email' ? '#/email' : '#/'
+
+    if (window.location.hash === nextHash) {
+      setRoute(nextRoute)
+      return
+    }
+
     setRoute(nextRoute)
+    window.location.hash = nextHash
   }
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -487,6 +507,57 @@ function App() {
     )
 
     setTaskEditor(null)
+  }
+
+  async function handleEmailAssist(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    const draft = emailDraft.trim()
+
+    if (!draft) {
+      return
+    }
+
+    try {
+      setLoadingState('email')
+      setActionMessage(null)
+      setError(null)
+      const result = await improveEmail({
+        subject: emailSubject.trim() || undefined,
+        goal: emailGoal.trim() || undefined,
+        incomingEmail: incomingEmail.trim() || undefined,
+        draft,
+      })
+      setEmailResult(result)
+      setActionMessage('Email draft improved.')
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'Unable to improve the email draft.',
+      )
+    } finally {
+      setLoadingState(null)
+    }
+  }
+
+  async function handleCopyEmailResult() {
+    if (!emailResult) {
+      return
+    }
+
+    const payload = [`Subject: ${emailResult.subject}`, '', emailResult.email].join('\n')
+
+    try {
+      await navigator.clipboard.writeText(payload)
+      setActionMessage('Improved email copied.')
+      setError(null)
+    } catch {
+      setError('Unable to copy the improved email on this browser.')
+    }
   }
 
   function renderTaskEditorForm() {
@@ -672,6 +743,9 @@ function App() {
             </button>
             <button type="button" className="secondary-button" onClick={() => void boot()}>
               Refresh
+            </button>
+            <button type="button" className="secondary-button" onClick={() => navigate('email')}>
+              Email Helper
             </button>
             <button type="button" className="primary-button compact-button" onClick={() => navigate('chat')}>
               Back to Chat
@@ -1045,6 +1119,155 @@ function App() {
     )
   }
 
+  if (route === 'email') {
+    return (
+      <main className="minimal-shell email-shell">
+        <header className="topbar minimal-topbar">
+          <div>
+            <p className="eyebrow">Second Brain</p>
+            <h1 className="topbar-title">Email Helper</h1>
+          </div>
+          <div className="route-actions">
+            {showInstallButton ? (
+              <button type="button" className="secondary-button" onClick={() => void handleInstall()}>
+                Install App
+              </button>
+            ) : null}
+            <button type="button" className="secondary-button" onClick={() => void handleLock()}>
+              Lock
+            </button>
+            <button type="button" className="secondary-button" onClick={() => navigate('workspace')}>
+              Workspace View
+            </button>
+            <button type="button" className="primary-button compact-button" onClick={() => navigate('chat')}>
+              Back to Chat
+            </button>
+          </div>
+        </header>
+
+        <section className="email-route-layout">
+          <div className="panel email-route-panel">
+            <div className="minimal-intro email-route-intro">
+              <h2>Improve rough replies without touching your notes.</h2>
+              <p>
+                Paste the email you received for context if needed, then paste your draft reply.
+                The helper will tighten structure, clarity, and content while keeping your intent.
+              </p>
+            </div>
+
+            {!config?.copilot.ready ? (
+              <div className="subtle-banner">
+                <strong>Copilot setup needed</strong>
+                <p>{config?.copilot.message ?? 'Loading Copilot status.'}</p>
+              </div>
+            ) : null}
+
+            <form className="email-helper email-route-form" onSubmit={handleEmailAssist}>
+              <div className="field-row">
+                <label className="field">
+                  <span>Subject</span>
+                  <input
+                    value={emailSubject}
+                    onChange={(event) => setEmailSubject(event.target.value)}
+                    placeholder="Optional outgoing subject"
+                  />
+                </label>
+                <label className="field">
+                  <span>Rewrite goal</span>
+                  <select
+                    value={emailGoal}
+                    onChange={(event) => setEmailGoal(event.target.value)}
+                  >
+                    <option value="Improve the structure, clarity, and content while keeping the intent.">
+                      Improve structure and content
+                    </option>
+                    <option value="Make this clearer and more concise while keeping the intent.">
+                      Clearer and shorter
+                    </option>
+                    <option value="Make this more direct and executive-friendly while keeping it polite.">
+                      More direct
+                    </option>
+                    <option value="Make this warmer and more collaborative while keeping it professional.">
+                      Warmer
+                    </option>
+                    <option value="Tighten this note into a crisp action-oriented email.">
+                      Action-oriented
+                    </option>
+                  </select>
+                </label>
+              </div>
+
+              <label className="field">
+                <span>Incoming email</span>
+                <textarea
+                  value={incomingEmail}
+                  onChange={(event) => setIncomingEmail(event.target.value)}
+                  rows={6}
+                  placeholder="Optional. Paste the email you are replying to so the model has the right context."
+                />
+              </label>
+
+              <label className="field">
+                <span>Your draft reply</span>
+                <textarea
+                  value={emailDraft}
+                  onChange={(event) => setEmailDraft(event.target.value)}
+                  rows={9}
+                  placeholder="Paste the rough draft here."
+                />
+              </label>
+
+              <div className="email-helper-actions">
+                <button type="submit" className="primary-button compact-button" disabled={loadingState === 'email'}>
+                  {loadingState === 'email' ? 'Improving…' : 'Improve email'}
+                </button>
+                {emailResult ? (
+                  <button
+                    type="button"
+                    className="secondary-button compact-button"
+                    onClick={() => void handleCopyEmailResult()}
+                  >
+                    Copy result
+                  </button>
+                ) : null}
+              </div>
+            </form>
+          </div>
+
+          <div className="panel email-route-panel">
+            <div className="panel-heading">
+              <h2>Improved Draft</h2>
+              <span>{emailResult ? 'Ready to copy' : 'Waiting for input'}</span>
+            </div>
+            {emailResult ? (
+              <div className="email-result">
+                <div className="email-result-block">
+                  <span className="email-result-label">Suggested subject</span>
+                  <p>{emailResult.subject}</p>
+                </div>
+                <div className="email-result-block">
+                  <span className="email-result-label">Improved email</span>
+                  <pre>{emailResult.email}</pre>
+                </div>
+                <div className="email-result-block">
+                  <span className="email-result-label">What changed</span>
+                  <p>{emailResult.notes}</p>
+                </div>
+              </div>
+            ) : (
+              <p className="empty-copy email-helper-copy">
+                Keep this route focused on drafting. It uses Copilot for rewrite quality but does not read or update your notes.
+              </p>
+            )}
+          </div>
+        </section>
+
+        {actionMessage ? <div className="success-banner">{actionMessage}</div> : null}
+        {error ? <div className="error-banner">{error}</div> : null}
+      </main>
+    )
+  }
+
   return (
     <main className="minimal-shell">
       <header className="topbar minimal-topbar">
@@ -1060,6 +1283,9 @@ function App() {
           ) : null}
           <button type="button" className="secondary-button" onClick={() => void handleLock()}>
             Lock
+          </button>
+          <button type="button" className="secondary-button" onClick={() => navigate('email')}>
+            Email Helper
           </button>
           <button type="button" className="secondary-button" onClick={() => navigate('workspace')}>
             Workspace View
@@ -1379,6 +1605,7 @@ function App() {
               )}
             </div>
           </details>
+
         </section>
       </section>
 
@@ -1431,8 +1658,16 @@ function renderTaskMetadata(item: RootNoteItem) {
   return <p className="task-metadata">{metadataBits.join(' • ')}</p>
 }
 
-function getRoute(): AppRoute {
-  return window.location.hash === '#/workspace' ? 'workspace' : 'chat'
+function getRouteFromHash(hash: string): AppRoute {
+  if (hash === '#/workspace') {
+    return 'workspace'
+  }
+
+  if (hash === '#/email') {
+    return 'email'
+  }
+
+  return 'chat'
 }
 
 function isRunningStandalone() {

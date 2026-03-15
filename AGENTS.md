@@ -27,6 +27,7 @@ If you are an agent working in this repo, focus on:
 - GitHub Copilot authentication available on the machine if you need live chat to work
 
 The app can still build and load its dashboard without Copilot auth, but `/api/chat` will not work correctly without it.
+The email helper at `/api/email` also depends on Copilot auth and accepts an optional incoming email for context.
 
 The backend is access-key protected. On first run it creates `.second-brain/auth.json` unless `SECOND_BRAIN_ACCESS_KEY` is already set.
 
@@ -103,6 +104,10 @@ curl -s http://127.0.0.1:8787/api/dashboard \
   -H 'x-second-brain-key: <ACCESS_KEY>'
 curl -s http://127.0.0.1:8787/api/activity \
   -H 'x-second-brain-key: <ACCESS_KEY>'
+curl -s -X POST http://127.0.0.1:8787/api/email \
+  -H 'Content-Type: application/json' \
+  -H 'x-second-brain-key: <ACCESS_KEY>' \
+  -d '{"subject":"ALB follow-up","goal":"Make this clearer and shorter.","draft":"Hi team, just checking in on the ALB request because I wanted to see if there was any update and if not no worries but if there is anything needed from me let me know."}'
 ```
 
 PowerShell equivalents:
