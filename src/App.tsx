@@ -9,16 +9,17 @@ import {
   improveEmail,
   rebuildIndex,
   runQuickAction,
-  sendChat,
+  searchNotes,
   storeAccessKey,
   undoLastChange,
   updateConfig,
   verifyAccessKey,
 } from './api'
+import { useChat } from './useChat'
+import { useQuickAdd } from './useQuickAdd'
+import { useTaskEditor, getTaskRowKey, labelForRootNote, getPanelsForAction } from './useTaskEditor'
 import type {
   AuthStatus,
-  ChatMessage,
-  ChatToolCall,
   ConfigResponse,
   DashboardResponse,
   EmailAssistResponse,
@@ -26,28 +27,14 @@ import type {
   RootNoteItem,
   RootNoteName,
   RootNoteCard,
+  SearchResult,
 } from './types'
 
-type LoadingState = 'boot' | 'config' | 'chat' | 'action' | 'email' | null
+type LoadingState = 'boot' | 'config' | 'action' | 'email' | null
 type AppRoute = 'chat' | 'workspace' | 'email'
 type ChatPanelKey = 'recentActions' | 'currentTodos' | 'waiting'
 type ChatPanelState = Record<ChatPanelKey, boolean>
-type RowFeedbackState = Record<string, string>
 type EmailOutputFormat = 'short-reply' | 'full-reply' | 'bullet-summary' | 'reply-with-next-actions'
-
-interface TaskEditorState {
-  rowKey: string
-  noteName: RootNoteName
-  originalText: string
-  nextItem: string
-  ticket: string
-  link: string
-  person: string
-  context: string
-  due: string
-  followUpOn: string
-  moveTo: RootNoteName
-}
 
 const QUICK_WORKFLOWS = [
   {
@@ -85,9 +72,6 @@ function App() {
   const [notesPathInput, setNotesPathInput] = useState('')
   const [trustedModeInput, setTrustedModeInput] = useState(false)
   const [localOnlyModeInput, setLocalOnlyModeInput] = useState(false)
-  const [prompt, setPrompt] = useState('')
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [sessionId, setSessionId] = useState<string>()
   const [loadingState, setLoadingState] = useState<LoadingState>('boot')
   const [error, setError] = useState<string | null>(null)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
@@ -105,22 +89,48 @@ function App() {
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null)
   const [isInstalled, setIsInstalled] = useState(isRunningStandalone())
   const [chatPanels, setChatPanels] = useState<ChatPanelState>(() => loadChatPanelState())
-  const [pendingRowKeys, setPendingRowKeys] = useState<string[]>([])
-  const [rowFeedback, setRowFeedback] = useState<RowFeedbackState>({})
-  const [taskEditor, setTaskEditor] = useState<TaskEditorState | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [searchBusy, setSearchBusy] = useState(false)
+  const searchTimer = useRef<number | null>(null)
   const [emailSubject, setEmailSubject] = useState('')
   const [incomingEmail, setIncomingEmail] = useState('')
   const [emailGoal, setEmailGoal] = useState('Improve the structure, clarity, and content while keeping the intent.')
   const [emailOutputFormat, setEmailOutputFormat] = useState<EmailOutputFormat>('full-reply')
   const [emailDraft, setEmailDraft] = useState('')
   const [emailResult, setEmailResult] = useState<EmailAssistResponse | null>(null)
-  const [quickAddTarget, setQuickAddTarget] = useState<RootNoteName | null>(null)
-  const [quickAddText, setQuickAddText] = useState('')
-  const [quickAddBusy, setQuickAddBusy] = useState(false)
-  const [quickAddFeedback, setQuickAddFeedback] = useState<string | null>(null)
-  const quickAddInputRef = useRef<HTMLInputElement>(null)
-  const quickAddFeedbackTimer = useRef<number | null>(null)
-  const rowFeedbackTimers = useRef(new Map<string, number>())
+
+  const handleUnauthorized = useCallback(async (message: string) => {
+    clearStoredAccessKey()
+    const nextAuthStatus = await fetchAuthStatus().catch(() => null)
+    setAuthStatus(nextAuthStatus)
+    setConfig(null)
+    setDashboard(null)
+    setError(message)
+  }, [])
+
+  const chat = useChat({
+    onUnauthorized: handleUnauthorized,
+    setDashboard,
+    setChatPanels,
+    setError,
+    setActionMessage,
+  })
+
+  const quickAdd = useQuickAdd({
+    onUnauthorized: handleUnauthorized,
+    setDashboard,
+    setError,
+    setChatPanels,
+  })
+
+  const tasks = useTaskEditor({
+    onUnauthorized: handleUnauthorized,
+    setDashboard,
+    setError,
+    setActionMessage,
+    setChatPanels,
+  })
 
   useEffect(() => {
     if (!window.location.hash) {
@@ -162,29 +172,6 @@ function App() {
     window.localStorage.setItem(CHAT_PANEL_STORAGE_KEY, JSON.stringify(chatPanels))
   }, [chatPanels])
 
-  useEffect(() => {
-    const timers = rowFeedbackTimers.current
-
-    return () => {
-      for (const timer of timers.values()) {
-        window.clearTimeout(timer)
-      }
-
-      timers.clear()
-    }
-  }, [])
-
-  const handleUnauthorized = useCallback(async (message: string) => {
-    clearStoredAccessKey()
-    const nextAuthStatus = await fetchAuthStatus().catch(() => null)
-    setAuthStatus(nextAuthStatus)
-    setConfig(null)
-    setDashboard(null)
-    setMessages([])
-    setSessionId(undefined)
-    setError(message)
-  }, [])
-
   const boot = useCallback(async () => {
     try {
       setLoadingState('boot')
@@ -194,8 +181,7 @@ function App() {
       if (!nextAuthStatus.authenticated) {
         setConfig(null)
         setDashboard(null)
-        setMessages([])
-        setSessionId(undefined)
+        chat.clearSession()
         setError(null)
         return
       }
@@ -273,8 +259,7 @@ function App() {
       setConfig(nextConfig)
       setDashboard(nextDashboard)
       if (trustedModeChanged || localOnlyModeChanged) {
-        setSessionId(undefined)
-        setMessages([])
+        chat.clearSession()
       }
       setActionMessage(
         `Notes workspace updated.${trustedModeChanged ? ` Trusted mode ${trustedModeInput ? 'enabled' : 'disabled'}.` : ''}${localOnlyModeChanged ? ` Local-only mode ${localOnlyModeInput ? 'enabled' : 'disabled'}.` : ''}`,
@@ -298,66 +283,7 @@ function App() {
 
   async function handlePromptSubmission(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    await submitPrompt(prompt)
-  }
-
-  async function submitPrompt(inputPrompt: string) {
-    const trimmedPrompt = inputPrompt.trim()
-
-    if (!trimmedPrompt) {
-      return
-    }
-
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: trimmedPrompt,
-    }
-
-    setMessages((current) => [...current, userMessage])
-    setPrompt('')
-    setLoadingState('chat')
-    setActionMessage(null)
-    setError(null)
-
-    try {
-      const response = await sendChat({ prompt: trimmedPrompt, sessionId })
-      const assistantMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: response.answer,
-        toolCalls: response.toolCalls,
-      }
-
-      setSessionId(response.sessionId)
-      setMessages((current) => [...current, assistantMessage])
-      setDashboard(await fetchDashboard())
-      setChatPanels((current) => ({
-        ...current,
-        ...getPanelsForToolCalls(response.toolCalls),
-      }))
-    } catch (caughtError) {
-      if (caughtError instanceof ApiError && caughtError.status === 401) {
-        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
-        return
-      }
-
-      const message =
-        caughtError instanceof Error ? caughtError.message : 'Unable to send the prompt.'
-      setSessionId(undefined)
-      setMessages((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: message,
-          error: true,
-        },
-      ])
-      setError(message)
-    } finally {
-      setLoadingState(null)
-    }
+    await chat.submitPrompt(chat.prompt)
   }
 
   async function handleQuickAction(action: QuickActionRequest, successMessage: string) {
@@ -435,79 +361,30 @@ function App() {
     }
   }
 
-  function openQuickAdd(target: RootNoteName) {
-    setQuickAddTarget(target)
-    setQuickAddText('')
-    setQuickAddFeedback(null)
+  function handleSearchInput(value: string) {
+    setSearchQuery(value)
 
-    const panelKey: ChatPanelKey = target === 'WAITING.md' ? 'waiting' : 'currentTodos'
-    setChatPanels((current) => ({
-      ...current,
-      [panelKey]: true,
-    }))
-
-    requestAnimationFrame(() => {
-      quickAddInputRef.current?.focus()
-    })
-  }
-
-  function closeQuickAdd() {
-    setQuickAddTarget(null)
-    setQuickAddText('')
-    setQuickAddFeedback(null)
-
-    if (quickAddFeedbackTimer.current) {
-      window.clearTimeout(quickAddFeedbackTimer.current)
-      quickAddFeedbackTimer.current = null
+    if (searchTimer.current) {
+      window.clearTimeout(searchTimer.current)
     }
-  }
 
-  async function handleQuickAddSubmit() {
-    const text = quickAddText.trim()
-
-    if (!text || !quickAddTarget || quickAddBusy) {
+    if (!value.trim()) {
+      setSearchResults([])
       return
     }
 
-    setQuickAddBusy(true)
-    setQuickAddFeedback(null)
-    setError(null)
+    searchTimer.current = window.setTimeout(async () => {
+      setSearchBusy(true)
 
-    try {
-      const response = await runQuickAction({
-        type: 'capture-root-item',
-        target: quickAddTarget,
-        item: text,
-      })
-
-      setDashboard(response.dashboard)
-      setQuickAddText('')
-      setQuickAddFeedback(`Added to ${labelForRootNote(quickAddTarget)}`)
-
-      if (quickAddFeedbackTimer.current) {
-        window.clearTimeout(quickAddFeedbackTimer.current)
+      try {
+        const response = await searchNotes(value.trim(), 6)
+        setSearchResults(response.results)
+      } catch {
+        setSearchResults([])
+      } finally {
+        setSearchBusy(false)
       }
-
-      quickAddFeedbackTimer.current = window.setTimeout(() => {
-        setQuickAddFeedback(null)
-        quickAddFeedbackTimer.current = null
-      }, 2000)
-
-      requestAnimationFrame(() => {
-        quickAddInputRef.current?.focus()
-      })
-    } catch (caughtError) {
-      if (caughtError instanceof ApiError && caughtError.status === 401) {
-        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
-        return
-      }
-
-      setError(
-        caughtError instanceof Error ? caughtError.message : 'Failed to add item.',
-      )
-    } finally {
-      setQuickAddBusy(false)
-    }
+    }, 300)
   }
 
   async function handleWorkflowPrompt(workflowPrompt: string) {
@@ -516,7 +393,7 @@ function App() {
       return
     }
 
-    await submitPrompt(workflowPrompt)
+    await chat.submitPrompt(workflowPrompt)
   }
 
   function navigate(nextRoute: AppRoute) {
@@ -562,22 +439,6 @@ function App() {
     }))
   }
 
-  function openTaskEditor(noteName: RootNoteName, item: RootNoteItem) {
-    setTaskEditor({
-      rowKey: getTaskRowKey(noteName, item.text),
-      noteName,
-      originalText: item.text,
-      nextItem: item.text,
-      ticket: item.metadata.ticket ?? '',
-      link: item.metadata.link ?? '',
-      person: item.metadata.person ?? '',
-      context: item.metadata.context ?? '',
-      due: item.metadata.due ?? '',
-      followUpOn: item.metadata.followUpOn ?? '',
-      moveTo: noteName,
-    })
-  }
-
   function prefillFollowUpEmail(item: RootNoteItem) {
     const person = item.metadata.person?.trim()
     const context = item.metadata.context?.trim()
@@ -603,108 +464,6 @@ function App() {
     setEmailResult(null)
     setActionMessage('Email helper prefilled from waiting item.')
     navigate('email')
-  }
-
-  function closeTaskEditor() {
-    setTaskEditor(null)
-  }
-
-  async function handleInlineQuickAction(
-    action: QuickActionRequest,
-    successMessage: string,
-    rowKey: string,
-    feedbackLabel: string,
-  ) {
-    setPendingRowKeys((current) =>
-      current.includes(rowKey) ? current : [...current, rowKey],
-    )
-    setActionMessage(null)
-    setError(null)
-
-    try {
-      const response = await runQuickAction(action)
-      setDashboard(response.dashboard)
-      setActionMessage(successMessage)
-      setChatPanels((current) => ({
-        ...current,
-        ...getPanelsForAction(action),
-      }))
-      queueRowFeedback(rowKey, feedbackLabel)
-    } catch (caughtError) {
-      if (caughtError instanceof ApiError && caughtError.status === 401) {
-        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
-        return
-      }
-
-      setError(
-        caughtError instanceof Error ? caughtError.message : 'The requested action failed.',
-      )
-    } finally {
-      setPendingRowKeys((current) => current.filter((value) => value !== rowKey))
-    }
-  }
-
-  function queueRowFeedback(rowKey: string, label: string) {
-    const existingTimer = rowFeedbackTimers.current.get(rowKey)
-
-    if (existingTimer) {
-      window.clearTimeout(existingTimer)
-    }
-
-    setRowFeedback((current) => ({
-      ...current,
-      [rowKey]: label,
-    }))
-
-    const timer = window.setTimeout(() => {
-      setRowFeedback((current) => {
-        const next = { ...current }
-        delete next[rowKey]
-        return next
-      })
-      rowFeedbackTimers.current.delete(rowKey)
-    }, 2200)
-
-    rowFeedbackTimers.current.set(rowKey, timer)
-  }
-
-  async function handleTaskEditorSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-
-    if (!taskEditor) {
-      return
-    }
-
-    const nextItem = taskEditor.nextItem.trim()
-
-    if (!nextItem) {
-      return
-    }
-
-    const rowKey = taskEditor.rowKey
-
-    await handleInlineQuickAction(
-      {
-        type: 'update-root-item',
-        target: taskEditor.noteName,
-        item: taskEditor.originalText,
-        nextItem,
-        ticket: taskEditor.ticket,
-        link: taskEditor.link,
-        person: taskEditor.person,
-        context: taskEditor.context,
-        due: taskEditor.due,
-        followUpOn: taskEditor.followUpOn,
-        moveTo: taskEditor.moveTo === taskEditor.noteName ? undefined : taskEditor.moveTo,
-      },
-      taskEditor.moveTo === taskEditor.noteName
-        ? `Updated item in ${labelForRootNote(taskEditor.noteName)}.`
-        : `Updated item and moved it to ${labelForRootNote(taskEditor.moveTo)}.`,
-      rowKey,
-      'Updated',
-    )
-
-    setTaskEditor(null)
   }
 
   async function handleEmailAssist(event: FormEvent<HTMLFormElement>) {
@@ -775,10 +534,10 @@ function App() {
 
   function renderQuickAddForm(panelTarget: 'currentTodos' | 'waiting') {
     const isCurrentPanel = panelTarget === 'currentTodos'
-      ? quickAddTarget === 'TODAY.md' || quickAddTarget === 'INBOX.md'
-      : quickAddTarget === 'WAITING.md'
+      ? quickAdd.target === 'TODAY.md' || quickAdd.target === 'INBOX.md'
+      : quickAdd.target === 'WAITING.md'
 
-    if (!isCurrentPanel || !quickAddTarget) {
+    if (!isCurrentPanel || !quickAdd.target) {
       return null
     }
 
@@ -787,42 +546,42 @@ function App() {
         className="quick-add-form"
         onSubmit={(event) => {
           event.preventDefault()
-          void handleQuickAddSubmit()
+          void quickAdd.submit()
         }}
       >
         <div className="quick-add-row">
           <input
-            ref={quickAddInputRef}
+            ref={quickAdd.inputRef}
             className="quick-add-input"
-            value={quickAddText}
-            onChange={(event) => setQuickAddText(event.target.value)}
+            value={quickAdd.text}
+            onChange={(event) => quickAdd.setText(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
-                closeQuickAdd()
+                quickAdd.close()
               }
             }}
-            placeholder={`Add to ${labelForRootNote(quickAddTarget)}…`}
-            disabled={quickAddBusy}
+            placeholder={`Add to ${labelForRootNote(quickAdd.target)}…`}
+            disabled={quickAdd.busy}
             autoFocus
           />
           {panelTarget === 'currentTodos' ? (
             <div className="quick-add-toggle">
               <button
                 type="button"
-                className={`quick-add-tab${quickAddTarget === 'TODAY.md' ? ' quick-add-tab-active' : ''}`}
+                className={`quick-add-tab${quickAdd.target === 'TODAY.md' ? ' quick-add-tab-active' : ''}`}
                 onClick={() => {
-                  setQuickAddTarget('TODAY.md')
-                  requestAnimationFrame(() => quickAddInputRef.current?.focus())
+                  quickAdd.setTarget('TODAY.md')
+                  requestAnimationFrame(() => quickAdd.inputRef.current?.focus())
                 }}
               >
                 Today
               </button>
               <button
                 type="button"
-                className={`quick-add-tab${quickAddTarget === 'INBOX.md' ? ' quick-add-tab-active' : ''}`}
+                className={`quick-add-tab${quickAdd.target === 'INBOX.md' ? ' quick-add-tab-active' : ''}`}
                 onClick={() => {
-                  setQuickAddTarget('INBOX.md')
-                  requestAnimationFrame(() => quickAddInputRef.current?.focus())
+                  quickAdd.setTarget('INBOX.md')
+                  requestAnimationFrame(() => quickAdd.inputRef.current?.focus())
                 }}
               >
                 Inbox
@@ -832,71 +591,55 @@ function App() {
           <button
             type="submit"
             className="mini-action-button"
-            disabled={quickAddBusy || !quickAddText.trim()}
+            disabled={quickAdd.busy || !quickAdd.text.trim()}
           >
-            {quickAddBusy ? 'Adding…' : 'Add'}
+            {quickAdd.busy ? 'Adding…' : 'Add'}
           </button>
           <button
             type="button"
             className="mini-action-button mini-action-button-secondary"
-            onClick={closeQuickAdd}
+            onClick={quickAdd.close}
           >
             Close
           </button>
         </div>
-        {quickAddFeedback ? (
-          <span className="quick-add-feedback">{quickAddFeedback}</span>
+        {quickAdd.feedback ? (
+          <span className="quick-add-feedback">{quickAdd.feedback}</span>
         ) : null}
       </form>
     )
   }
 
   function renderTaskEditorForm() {
-    if (!taskEditor) {
+    if (!tasks.taskEditor) {
       return null
     }
 
+    const editor = tasks.taskEditor
+
     return (
-      <form className="task-editor" onSubmit={handleTaskEditorSubmit}>
+      <form className="task-editor" onSubmit={(event) => { event.preventDefault(); void tasks.submitEditor() }}>
         <label className="field">
           <span>Task</span>
           <input
-            value={taskEditor.nextItem}
-            onChange={(event) =>
-              setTaskEditor((current) =>
-                current
-                  ? { ...current, nextItem: event.target.value }
-                  : current,
-              )
-            }
+            value={editor.nextItem}
+            onChange={(event) => tasks.updateField('nextItem', event.target.value)}
           />
         </label>
         <div className="field-row">
           <label className="field">
             <span>Person</span>
             <input
-              value={taskEditor.person}
-              onChange={(event) =>
-                setTaskEditor((current) =>
-                  current
-                    ? { ...current, person: event.target.value }
-                    : current,
-                )
-              }
+              value={editor.person}
+              onChange={(event) => tasks.updateField('person', event.target.value)}
               placeholder="Sarah"
             />
           </label>
           <label className="field">
             <span>Ticket</span>
             <input
-              value={taskEditor.ticket}
-              onChange={(event) =>
-                setTaskEditor((current) =>
-                  current
-                    ? { ...current, ticket: event.target.value }
-                    : current,
-                )
-              }
+              value={editor.ticket}
+              onChange={(event) => tasks.updateField('ticket', event.target.value)}
               placeholder="ABC-123"
             />
           </label>
@@ -904,28 +647,16 @@ function App() {
         <label className="field">
           <span>Link</span>
           <input
-            value={taskEditor.link}
-            onChange={(event) =>
-              setTaskEditor((current) =>
-                current
-                  ? { ...current, link: event.target.value }
-                  : current,
-              )
-            }
+            value={editor.link}
+            onChange={(event) => tasks.updateField('link', event.target.value)}
             placeholder="https://example.com/thread-or-ticket"
           />
         </label>
         <label className="field">
           <span>Context</span>
           <textarea
-            value={taskEditor.context}
-            onChange={(event) =>
-              setTaskEditor((current) =>
-                current
-                  ? { ...current, context: event.target.value }
-                  : current,
-              )
-            }
+            value={editor.context}
+            onChange={(event) => tasks.updateField('context', event.target.value)}
             rows={2}
             placeholder="Waiting on a reply to the 15 March email"
           />
@@ -935,45 +666,24 @@ function App() {
             <span>Due</span>
             <input
               type="date"
-              value={taskEditor.due}
-              onChange={(event) =>
-                setTaskEditor((current) =>
-                  current
-                    ? { ...current, due: event.target.value }
-                    : current,
-                )
-              }
+              value={editor.due}
+              onChange={(event) => tasks.updateField('due', event.target.value)}
             />
           </label>
           <label className="field">
             <span>Follow up</span>
             <input
               type="date"
-              value={taskEditor.followUpOn}
-              onChange={(event) =>
-                setTaskEditor((current) =>
-                  current
-                    ? { ...current, followUpOn: event.target.value }
-                    : current,
-                )
-              }
+              value={editor.followUpOn}
+              onChange={(event) => tasks.updateField('followUpOn', event.target.value)}
             />
           </label>
         </div>
         <label className="field">
           <span>Move to</span>
           <select
-            value={taskEditor.moveTo}
-            onChange={(event) =>
-              setTaskEditor((current) =>
-                current
-                  ? {
-                      ...current,
-                      moveTo: event.target.value as RootNoteName,
-                    }
-                  : current,
-              )
-            }
+            value={editor.moveTo}
+            onChange={(event) => tasks.updateField('moveTo', event.target.value as RootNoteName)}
           >
             <option value="TODAY.md">Today</option>
             <option value="WAITING.md">Waiting</option>
@@ -987,7 +697,7 @@ function App() {
           <button
             type="button"
             className="mini-action-button mini-action-button-secondary"
-            onClick={closeTaskEditor}
+            onClick={tasks.closeEditor}
           >
             Cancel
           </button>
@@ -1007,6 +717,7 @@ function App() {
       note.fileName === 'INBOX.md',
   )
   const waitingNote = rootNotes.find((note) => note.fileName === 'WAITING.md')
+  const urgentItems = dashboard?.urgentItems ?? []
   const localOnlyModeEnabled = config?.localOnlyMode ?? false
 
   if (!authStatus?.authenticated) {
@@ -1709,9 +1420,25 @@ function App() {
             </div>
           ) : null}
 
-          {messages.length > 0 ? (
+          {urgentItems.length > 0 ? (
+            <div className="urgent-banner">
+              <strong>Needs attention</strong>
+              <ul className="urgent-list">
+                {urgentItems.map((item) => (
+                  <li key={`${item.noteName}-${item.text}`} className={item.overdue ? 'urgent-overdue' : ''}>
+                    <span>{item.text}</span>
+                    {item.due ? <span className="urgent-tag">Due {item.due}</span> : null}
+                    {item.followUpOn ? <span className="urgent-tag">Follow up {item.followUpOn}</span> : null}
+                    <span className="urgent-source">{labelForRootNote(item.noteName)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {chat.messages.length > 0 ? (
             <div className="messages minimal-messages">
-              {messages.map((message) => (
+              {chat.messages.map((message) => (
                 <article
                   key={message.id}
                   className={`message message-${message.role} ${message.error ? 'message-error' : ''}`}
@@ -1737,8 +1464,8 @@ function App() {
 
           <form className="composer minimal-composer" onSubmit={handlePromptSubmission}>
             <textarea
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
+              value={chat.prompt}
+              onChange={(event) => chat.setPrompt(event.target.value)}
               onKeyDown={handlePromptKeyDown}
               placeholder="Ask what to work on today, add a task, update a project, or ask a general question."
               rows={3}
@@ -1749,9 +1476,9 @@ function App() {
               <button
                 type="submit"
                 className="primary-button"
-                disabled={loadingState === 'chat' || localOnlyModeEnabled}
+                disabled={chat.chatBusy || localOnlyModeEnabled}
               >
-                {loadingState === 'chat' ? 'Sending…' : 'Send'}
+                {chat.chatBusy ? 'Sending…' : 'Send'}
               </button>
             </div>
           </form>
@@ -1762,12 +1489,42 @@ function App() {
                 type="button"
                 className="workflow-chip"
                 onClick={() => void handleWorkflowPrompt(workflow.prompt)}
-                disabled={loadingState === 'chat' || localOnlyModeEnabled}
+                disabled={chat.chatBusy || localOnlyModeEnabled}
               >
                 {workflow.label}
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="search-box">
+          <input
+            type="search"
+            className="search-input"
+            value={searchQuery}
+            onChange={(event) => handleSearchInput(event.target.value)}
+            placeholder="Search your notes…"
+          />
+          {searchBusy ? <span className="search-status">Searching…</span> : null}
+          {searchResults.length > 0 ? (
+            <div className="search-results">
+              {searchResults.map((result) => (
+                <article key={result.id} className="search-result-card">
+                  <header>
+                    <strong>{result.title}</strong>
+                    {result.project ? <span className="search-project">{result.project}</span> : null}
+                  </header>
+                  <p>{result.excerpt}</p>
+                  <footer>
+                    <span>{result.path}</span>
+                    {result.updatedAt ? <span>{formatTime(result.updatedAt)}</span> : null}
+                  </footer>
+                </article>
+              ))}
+            </div>
+          ) : searchQuery.trim() && !searchBusy ? (
+            <p className="search-empty">No results found.</p>
+          ) : null}
         </div>
 
         <div className="minimal-meta">
@@ -1838,10 +1595,10 @@ function App() {
                   onClick={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
-                    if (quickAddTarget === 'TODAY.md' || quickAddTarget === 'INBOX.md') {
-                      closeQuickAdd()
+                    if (quickAdd.target === 'TODAY.md' || quickAdd.target === 'INBOX.md') {
+                      quickAdd.close()
                     } else {
-                      openQuickAdd('TODAY.md')
+                      quickAdd.open('TODAY.md')
                     }
                   }}
                 >
@@ -1864,9 +1621,9 @@ function App() {
                         <div className="compact-task-list">
                           {note.items.map((item) => {
                             const rowKey = getTaskRowKey(note.fileName, item.text)
-                            const isPending = pendingRowKeys.includes(rowKey)
-                            const feedback = rowFeedback[rowKey]
-                            const isEditing = taskEditor?.rowKey === rowKey
+                            const isPending = tasks.pendingRowKeys.includes(rowKey)
+                            const feedback = tasks.rowFeedback[rowKey]
+                            const isEditing = tasks.taskEditor?.rowKey === rowKey
 
                             return (
                               <div key={`${note.fileName}-${item.text}`} className="compact-task-row">
@@ -1879,7 +1636,7 @@ function App() {
                                     type="button"
                                     className="mini-action-button mini-action-button-secondary"
                                     disabled={isPending}
-                                    onClick={() => openTaskEditor(note.fileName, item)}
+                                    onClick={() => tasks.openEditor(note.fileName, item)}
                                   >
                                     {isEditing ? 'Editing…' : 'Update'}
                                   </button>
@@ -1889,7 +1646,7 @@ function App() {
                                       className="mini-action-button mini-action-button-secondary"
                                       disabled={isPending}
                                       onClick={() => {
-                                        void handleInlineQuickAction(
+                                        void tasks.inlineQuickAction(
                                           {
                                             type: 'promote-inbox-item',
                                             item: item.text,
@@ -1909,7 +1666,7 @@ function App() {
                                       className="mini-action-button mini-action-button-secondary"
                                       disabled={isPending}
                                       onClick={() => {
-                                        void handleInlineQuickAction(
+                                        void tasks.inlineQuickAction(
                                           {
                                             type: 'defer-today-item',
                                             item: item.text,
@@ -1928,7 +1685,7 @@ function App() {
                                     className="mini-action-button"
                                     disabled={isPending}
                                     onClick={() => {
-                                      void handleInlineQuickAction(
+                                      void tasks.inlineQuickAction(
                                         {
                                           type: 'mark-root-item-done',
                                           target: note.fileName,
@@ -1975,10 +1732,10 @@ function App() {
                   onClick={(event) => {
                     event.preventDefault()
                     event.stopPropagation()
-                    if (quickAddTarget === 'WAITING.md') {
-                      closeQuickAdd()
+                    if (quickAdd.target === 'WAITING.md') {
+                      quickAdd.close()
                     } else {
-                      openQuickAdd('WAITING.md')
+                      quickAdd.open('WAITING.md')
                     }
                   }}
                 >
@@ -1999,9 +1756,9 @@ function App() {
                     <div className="compact-task-list">
                       {waitingNote.items.map((item) => {
                         const rowKey = getTaskRowKey('WAITING.md', item.text)
-                        const isPending = pendingRowKeys.includes(rowKey)
-                        const feedback = rowFeedback[rowKey]
-                        const isEditing = taskEditor?.rowKey === rowKey
+                        const isPending = tasks.pendingRowKeys.includes(rowKey)
+                        const feedback = tasks.rowFeedback[rowKey]
+                        const isEditing = tasks.taskEditor?.rowKey === rowKey
 
                         return (
                           <div key={`waiting-panel-${item.text}`} className="compact-task-row">
@@ -2014,7 +1771,7 @@ function App() {
                                 type="button"
                                 className="mini-action-button mini-action-button-secondary"
                                 disabled={isPending}
-                                onClick={() => openTaskEditor('WAITING.md', item)}
+                                onClick={() => tasks.openEditor('WAITING.md', item)}
                               >
                                 {isEditing ? 'Editing…' : 'Update'}
                               </button>
@@ -2031,7 +1788,7 @@ function App() {
                                 className="mini-action-button mini-action-button-secondary"
                                 disabled={isPending}
                                 onClick={() => {
-                                  void handleInlineQuickAction(
+                                  void tasks.inlineQuickAction(
                                     {
                                       type: 'move-root-item',
                                       from: 'WAITING.md',
@@ -2051,7 +1808,7 @@ function App() {
                                 className="mini-action-button"
                                 disabled={isPending}
                                 onClick={() => {
-                                  void handleInlineQuickAction(
+                                  void tasks.inlineQuickAction(
                                     {
                                       type: 'mark-root-item-done',
                                       target: 'WAITING.md',
@@ -2105,18 +1862,6 @@ function RootNoteCardView(props: { note: RootNoteCard }) {
   )
 }
 
-function labelForRootNote(note: RootNoteName) {
-  if (note === 'TODAY.md') {
-    return 'Today'
-  }
-
-  if (note === 'WAITING.md') {
-    return 'Waiting'
-  }
-
-  return 'Inbox'
-}
-
 function renderTaskMetadata(item: RootNoteItem) {
   const metadataBits = [
     item.metadata.ticket ? `Ticket: ${item.metadata.ticket}` : null,
@@ -2150,10 +1895,6 @@ function isRunningStandalone() {
   return window.matchMedia('(display-mode: standalone)').matches
 }
 
-function getTaskRowKey(noteName: RootNoteName, itemText: string) {
-  return `${noteName}:${itemText.trim().toLowerCase()}`
-}
-
 function loadChatPanelState(): ChatPanelState {
   const raw = window.localStorage.getItem(CHAT_PANEL_STORAGE_KEY)
 
@@ -2171,141 +1912,6 @@ function loadChatPanelState(): ChatPanelState {
   } catch {
     return DEFAULT_CHAT_PANEL_STATE
   }
-}
-
-function getPanelsForAction(action: QuickActionRequest): Partial<ChatPanelState> {
-  const nextState: Partial<ChatPanelState> = {}
-
-  if (action.type === 'capture-root-item') {
-    if (action.target === 'WAITING.md') {
-      nextState.waiting = true
-    } else {
-      nextState.currentTodos = true
-    }
-
-    return nextState
-  }
-
-  if (action.type === 'move-root-item') {
-    if (action.from === 'WAITING.md' || action.to === 'WAITING.md') {
-      nextState.waiting = true
-    }
-
-    if (
-      action.from === 'TODAY.md' ||
-      action.from === 'INBOX.md' ||
-      action.to === 'TODAY.md' ||
-      action.to === 'INBOX.md'
-    ) {
-      nextState.currentTodos = true
-    }
-
-    return nextState
-  }
-
-  if (action.type === 'promote-inbox-item') {
-    return {
-      ...nextState,
-      currentTodos: true,
-    }
-  }
-
-  if (action.type === 'defer-today-item') {
-    return {
-      ...nextState,
-      currentTodos: true,
-      waiting: true,
-    }
-  }
-
-  if (action.type === 'mark-root-item-done') {
-    if (action.target === 'WAITING.md') {
-      nextState.waiting = true
-    } else {
-      nextState.currentTodos = true
-    }
-
-    return nextState
-  }
-
-  if (action.type === 'update-root-item') {
-    const destinationNote = action.moveTo ?? action.target
-
-    if (
-      action.target === 'WAITING.md' ||
-      destinationNote === 'WAITING.md'
-    ) {
-      nextState.waiting = true
-    }
-
-    if (
-      action.target === 'TODAY.md' ||
-      action.target === 'INBOX.md' ||
-      destinationNote === 'TODAY.md' ||
-      destinationNote === 'INBOX.md'
-    ) {
-      nextState.currentTodos = true
-    }
-
-    return nextState
-  }
-
-  if (action.type === 'undo-last-change') {
-    return {
-      ...nextState,
-      currentTodos: true,
-      waiting: true,
-    }
-  }
-
-  return nextState
-}
-
-function getPanelsForToolCalls(toolCalls: ChatToolCall[]): Partial<ChatPanelState> {
-  const completedToolNames = toolCalls
-    .filter((toolCall) => toolCall.status === 'completed')
-    .map((toolCall) => toolCall.name)
-
-  if (completedToolNames.length === 0) {
-    return {}
-  }
-
-  const nextState: Partial<ChatPanelState> = {}
-  const writeTools = new Set([
-    'capture_root_item',
-    'move_root_item',
-    'mark_root_item_done',
-    'promote_inbox_item',
-    'defer_today_item',
-    'update_root_item',
-    'append_project_update',
-    'add_project_next_step',
-    'undo_last_change',
-    'write_note',
-    'append_note',
-  ])
-
-  if (completedToolNames.some((toolName) => writeTools.has(toolName))) {
-    // recentActions panel is only opened by explicit user toggle
-  }
-
-  if (
-    completedToolNames.some((toolName) =>
-      ['capture_root_item', 'move_root_item', 'mark_root_item_done', 'promote_inbox_item', 'defer_today_item', 'update_root_item', 'undo_last_change'].includes(toolName),
-    )
-  ) {
-    nextState.currentTodos = true
-  }
-
-  if (
-    completedToolNames.some((toolName) =>
-      ['move_root_item', 'defer_today_item', 'update_root_item', 'undo_last_change'].includes(toolName),
-    )
-  ) {
-    nextState.waiting = true
-  }
-
-  return nextState
 }
 
 function formatTime(value: string) {

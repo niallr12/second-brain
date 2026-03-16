@@ -194,6 +194,7 @@ export class NotesService {
       recentActivity: this.activityStore.list(),
       recentHistory: this.getHistory(),
       lastUndo: this.getLastUndoSummary(),
+      urgentItems: this.getUrgentItems(),
     }
   }
 
@@ -966,6 +967,60 @@ export class NotesService {
     const nextOperation = this.indexOperation.then(operation)
     this.indexOperation = nextOperation.catch(() => undefined)
     return nextOperation
+  }
+
+  private getUrgentItems(): Array<{
+    text: string
+    noteName: RootNoteName
+    due?: string
+    followUpOn?: string
+    overdue: boolean
+    followUpDue: boolean
+  }> {
+    const today = new Date().toISOString().slice(0, 10)
+    const urgent: Array<{
+      text: string
+      noteName: RootNoteName
+      due?: string
+      followUpOn?: string
+      overdue: boolean
+      followUpDue: boolean
+    }> = []
+
+    for (const fileName of ROOT_NOTE_NAMES) {
+      const card = this.getRootNoteCard(fileName)
+
+      for (const item of card.items) {
+        const due = item.metadata.due
+        const followUpOn = item.metadata.followUpOn
+        const overdue = !!due && due <= today
+        const followUpDue = !!followUpOn && followUpOn <= today
+
+        if (overdue || followUpDue) {
+          urgent.push({
+            text: item.text,
+            noteName: fileName,
+            due,
+            followUpOn,
+            overdue,
+            followUpDue,
+          })
+        }
+      }
+    }
+
+    urgent.sort((a, b) => {
+      // Overdue items first
+      if (a.overdue && !b.overdue) return -1
+      if (!a.overdue && b.overdue) return 1
+
+      // Then by earliest date ascending
+      const dateA = a.due ?? a.followUpOn ?? ''
+      const dateB = b.due ?? b.followUpOn ?? ''
+      return dateA.localeCompare(dateB)
+    })
+
+    return urgent
   }
 
   private getRootNoteCard(fileName: RootNoteName): RootNoteCard {

@@ -929,3 +929,139 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Urgent items banner */
+.urgent-banner {
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.urgent-banner strong {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #e65100;
+}
+
+.urgent-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.4rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.urgent-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.urgent-overdue {
+  color: #c62828;
+  font-weight: 600;
+}
+
+.urgent-tag {
+  background: #fff3e0;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.75rem;
+  color: #e65100;
+}
+
+.urgent-source {
+  font-size: 0.7rem;
+  color: #888;
+  margin-left: auto;
+}
+
+/* Search box */
+.search-box {
+  margin: 0.5rem 0;
+  position: relative;
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  border: 1px solid #ddd;
+  border-radius: 0.5rem;
+  background: #fafafa;
+  box-sizing: border-box;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #888;
+  background: #fff;
+}
+
+.search-status {
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.search-results {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.search-result-card {
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.search-result-card header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.search-result-card header strong {
+  font-size: 0.85rem;
+}
+
+.search-project {
+  font-size: 0.7rem;
+  color: #666;
+  background: #f0f0f0;
+  border-radius: 0.2rem;
+  padding: 0.05rem 0.3rem;
+}
+
+.search-result-card p {
+  font-size: 0.8rem;
+  color: #555;
+  margin: 0.2rem 0;
+  white-space: pre-line;
+}
+
+.search-result-card footer {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: #999;
+}
+
+.search-empty {
+  font-size: 0.8rem;
+  color: #999;
+  text-align: center;
+  margin: 0.5rem 0;
+}

@@ -85,6 +85,15 @@ export interface ProjectSummary {
   aliases: string[]
 }
 
+export interface UrgentItem {
+  text: string
+  noteName: RootNoteName
+  due?: string
+  followUpOn?: string
+  overdue: boolean
+  followUpDue: boolean
+}
+
 export interface DashboardResponse {
   notesPath: string
   model: string
@@ -98,6 +107,7 @@ export interface DashboardResponse {
   recentActivity: ActivityEntry[]
   recentHistory: HistoryEntry[]
   lastUndo: HistoryEntry | null
+  urgentItems: UrgentItem[]
 }
 
 export interface ChatToolCall {
@@ -141,4 +151,21 @@ export type QuickActionRequest =
 export interface QuickActionResponse {
   result: unknown
   dashboard: DashboardResponse
+}
+
+export interface SearchResult {
+  id: string
+  path: string
+  title: string
+  sectionTitle: string
+  citation: string
+  project: string | null
+  excerpt: string
+  updatedAt: string | null
+  score: number
+}
+
+export interface SearchResponse {
+  query: string
+  results: SearchResult[]
 }

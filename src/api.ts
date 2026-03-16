@@ -8,6 +8,7 @@ import type {
   HistoryEntry,
   QuickActionRequest,
   QuickActionResponse,
+  SearchResponse,
 } from './types'
 
 const ACCESS_KEY_STORAGE_KEY = 'second-brain.access-key'
@@ -130,4 +131,12 @@ export function runQuickAction(payload: QuickActionRequest) {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+export function searchNotes(query: string, limit?: number) {
+  const params = new URLSearchParams({ q: query })
+  if (limit !== undefined) {
+    params.set('limit', String(limit))
+  }
+  return request<SearchResponse>(`/api/search?${params.toString()}`)
 }

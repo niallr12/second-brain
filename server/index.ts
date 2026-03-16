@@ -105,6 +105,25 @@ app.use('/api', (request: Request, response: Response, next) => {
   })
 })
 
+app.get('/api/search', (request: Request, response: Response) => {
+  try {
+    const q = typeof request.query.q === 'string' ? request.query.q.trim() : ''
+    const limit = Number(request.query.limit) || 8
+
+    if (!q) {
+      response.status(400).json({ error: 'The "q" query parameter is required.' })
+      return
+    }
+
+    const results = notesService.search(q, limit)
+    response.json({ query: q, results })
+  } catch (error) {
+    response.status(500).json({
+      error: error instanceof Error ? error.message : 'Search failed unexpectedly.',
+    })
+  }
+})
+
 app.get('/api/config', async (_request: Request, response: Response) => {
   response.json({
     ...notesService.getConfig(),
