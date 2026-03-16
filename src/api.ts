@@ -119,6 +119,12 @@ export function undoLastChange() {
   })
 }
 
+export function rebuildIndex() {
+  return request<QuickActionResponse>('/api/reindex', {
+    method: 'POST',
+  })
+}
+
 export function runQuickAction(payload: QuickActionRequest) {
   return request<QuickActionResponse>('/api/actions', {
     method: 'POST',

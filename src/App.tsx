@@ -7,6 +7,7 @@ import {
   fetchConfig,
   fetchDashboard,
   improveEmail,
+  rebuildIndex,
   runQuickAction,
   sendChat,
   storeAccessKey,
@@ -113,6 +114,12 @@ function App() {
   const [emailOutputFormat, setEmailOutputFormat] = useState<EmailOutputFormat>('full-reply')
   const [emailDraft, setEmailDraft] = useState('')
   const [emailResult, setEmailResult] = useState<EmailAssistResponse | null>(null)
+  const [quickAddTarget, setQuickAddTarget] = useState<RootNoteName | null>(null)
+  const [quickAddText, setQuickAddText] = useState('')
+  const [quickAddBusy, setQuickAddBusy] = useState(false)
+  const [quickAddFeedback, setQuickAddFeedback] = useState<string | null>(null)
+  const quickAddInputRef = useRef<HTMLInputElement>(null)
+  const quickAddFeedbackTimer = useRef<number | null>(null)
   const rowFeedbackTimers = useRef(new Map<string, number>())
 
   useEffect(() => {
@@ -337,6 +344,7 @@ function App() {
 
       const message =
         caughtError instanceof Error ? caughtError.message : 'Unable to send the prompt.'
+      setSessionId(undefined)
       setMessages((current) => [
         ...current,
         {
@@ -388,7 +396,6 @@ function App() {
       setActionMessage('Last change undone.')
       setChatPanels((current) => ({
         ...current,
-        recentActions: true,
         currentTodos: true,
         waiting: true,
       }))
@@ -403,6 +410,103 @@ function App() {
       )
     } finally {
       setLoadingState(null)
+    }
+  }
+
+  async function handleRebuildIndex() {
+    try {
+      setLoadingState('action')
+      setActionMessage(null)
+      setError(null)
+      const response = await rebuildIndex()
+      setDashboard(response.dashboard)
+      setActionMessage('Index rebuilt successfully.')
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'Unable to rebuild the index.',
+      )
+    } finally {
+      setLoadingState(null)
+    }
+  }
+
+  function openQuickAdd(target: RootNoteName) {
+    setQuickAddTarget(target)
+    setQuickAddText('')
+    setQuickAddFeedback(null)
+
+    const panelKey: ChatPanelKey = target === 'WAITING.md' ? 'waiting' : 'currentTodos'
+    setChatPanels((current) => ({
+      ...current,
+      [panelKey]: true,
+    }))
+
+    requestAnimationFrame(() => {
+      quickAddInputRef.current?.focus()
+    })
+  }
+
+  function closeQuickAdd() {
+    setQuickAddTarget(null)
+    setQuickAddText('')
+    setQuickAddFeedback(null)
+
+    if (quickAddFeedbackTimer.current) {
+      window.clearTimeout(quickAddFeedbackTimer.current)
+      quickAddFeedbackTimer.current = null
+    }
+  }
+
+  async function handleQuickAddSubmit() {
+    const text = quickAddText.trim()
+
+    if (!text || !quickAddTarget || quickAddBusy) {
+      return
+    }
+
+    setQuickAddBusy(true)
+    setQuickAddFeedback(null)
+    setError(null)
+
+    try {
+      const response = await runQuickAction({
+        type: 'capture-root-item',
+        target: quickAddTarget,
+        item: text,
+      })
+
+      setDashboard(response.dashboard)
+      setQuickAddText('')
+      setQuickAddFeedback(`Added to ${labelForRootNote(quickAddTarget)}`)
+
+      if (quickAddFeedbackTimer.current) {
+        window.clearTimeout(quickAddFeedbackTimer.current)
+      }
+
+      quickAddFeedbackTimer.current = window.setTimeout(() => {
+        setQuickAddFeedback(null)
+        quickAddFeedbackTimer.current = null
+      }, 2000)
+
+      requestAnimationFrame(() => {
+        quickAddInputRef.current?.focus()
+      })
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
+      setError(
+        caughtError instanceof Error ? caughtError.message : 'Failed to add item.',
+      )
+    } finally {
+      setQuickAddBusy(false)
     }
   }
 
@@ -667,6 +771,84 @@ function App() {
     } catch {
       setError('Unable to copy the improved email on this browser.')
     }
+  }
+
+  function renderQuickAddForm(panelTarget: 'currentTodos' | 'waiting') {
+    const isCurrentPanel = panelTarget === 'currentTodos'
+      ? quickAddTarget === 'TODAY.md' || quickAddTarget === 'INBOX.md'
+      : quickAddTarget === 'WAITING.md'
+
+    if (!isCurrentPanel || !quickAddTarget) {
+      return null
+    }
+
+    return (
+      <form
+        className="quick-add-form"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void handleQuickAddSubmit()
+        }}
+      >
+        <div className="quick-add-row">
+          <input
+            ref={quickAddInputRef}
+            className="quick-add-input"
+            value={quickAddText}
+            onChange={(event) => setQuickAddText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                closeQuickAdd()
+              }
+            }}
+            placeholder={`Add to ${labelForRootNote(quickAddTarget)}…`}
+            disabled={quickAddBusy}
+            autoFocus
+          />
+          {panelTarget === 'currentTodos' ? (
+            <div className="quick-add-toggle">
+              <button
+                type="button"
+                className={`quick-add-tab${quickAddTarget === 'TODAY.md' ? ' quick-add-tab-active' : ''}`}
+                onClick={() => {
+                  setQuickAddTarget('TODAY.md')
+                  requestAnimationFrame(() => quickAddInputRef.current?.focus())
+                }}
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                className={`quick-add-tab${quickAddTarget === 'INBOX.md' ? ' quick-add-tab-active' : ''}`}
+                onClick={() => {
+                  setQuickAddTarget('INBOX.md')
+                  requestAnimationFrame(() => quickAddInputRef.current?.focus())
+                }}
+              >
+                Inbox
+              </button>
+            </div>
+          ) : null}
+          <button
+            type="submit"
+            className="mini-action-button"
+            disabled={quickAddBusy || !quickAddText.trim()}
+          >
+            {quickAddBusy ? 'Adding…' : 'Add'}
+          </button>
+          <button
+            type="button"
+            className="mini-action-button mini-action-button-secondary"
+            onClick={closeQuickAdd}
+          >
+            Close
+          </button>
+        </div>
+        {quickAddFeedback ? (
+          <span className="quick-add-feedback">{quickAddFeedback}</span>
+        ) : null}
+      </form>
+    )
   }
 
   function renderTaskEditorForm() {
@@ -1485,6 +1667,14 @@ function App() {
           <button type="button" className="secondary-button" onClick={() => void handleLock()}>
             Lock
           </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => void handleRebuildIndex()}
+            disabled={loadingState === 'action'}
+          >
+            {loadingState === 'action' ? 'Rebuilding…' : 'Rebuild Index'}
+          </button>
           <button type="button" className="secondary-button" onClick={() => navigate('email')}>
             Email Helper
           </button>
@@ -1641,9 +1831,27 @@ function App() {
           >
             <summary>
               <span>Current To Dos</span>
-              <span>{actionableNotes.reduce((count, note) => count + note.items.length, 0)} items</span>
+              <span className="summary-actions">
+                <button
+                  type="button"
+                  className="panel-add-button"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    if (quickAddTarget === 'TODAY.md' || quickAddTarget === 'INBOX.md') {
+                      closeQuickAdd()
+                    } else {
+                      openQuickAdd('TODAY.md')
+                    }
+                  }}
+                >
+                  +
+                </button>
+                {actionableNotes.reduce((count, note) => count + note.items.length, 0)} items
+              </span>
             </summary>
             <div className="expandable-body">
+              {renderQuickAddForm('currentTodos')}
               {actionableNotes.length > 0 ? (
                 <div className="compact-note-list">
                   {actionableNotes.map((note) => (
@@ -1760,9 +1968,27 @@ function App() {
           >
             <summary>
               <span>Waiting</span>
-              <span>{waitingNote?.items.length ?? 0} items</span>
+              <span className="summary-actions">
+                <button
+                  type="button"
+                  className="panel-add-button"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    if (quickAddTarget === 'WAITING.md') {
+                      closeQuickAdd()
+                    } else {
+                      openQuickAdd('WAITING.md')
+                    }
+                  }}
+                >
+                  +
+                </button>
+                {waitingNote?.items.length ?? 0} items
+              </span>
             </summary>
             <div className="expandable-body">
+              {renderQuickAddForm('waiting')}
               {waitingNote?.items.length ? (
                 <div className="compact-note-list">
                   <article className="compact-entry">
@@ -1948,9 +2174,7 @@ function loadChatPanelState(): ChatPanelState {
 }
 
 function getPanelsForAction(action: QuickActionRequest): Partial<ChatPanelState> {
-  const nextState: Partial<ChatPanelState> = {
-    recentActions: true,
-  }
+  const nextState: Partial<ChatPanelState> = {}
 
   if (action.type === 'capture-root-item') {
     if (action.target === 'WAITING.md') {
@@ -2062,7 +2286,7 @@ function getPanelsForToolCalls(toolCalls: ChatToolCall[]): Partial<ChatPanelStat
   ])
 
   if (completedToolNames.some((toolName) => writeTools.has(toolName))) {
-    nextState.recentActions = true
+    // recentActions panel is only opened by explicit user toggle
   }
 
   if (

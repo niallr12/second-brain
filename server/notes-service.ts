@@ -181,6 +181,11 @@ export class NotesService {
     return this.getConfig()
   }
 
+  async rebuildIndex() {
+    await this.reindex()
+    return this.getConfig()
+  }
+
   getDashboard() {
     return {
       ...this.getConfig(),
@@ -377,6 +382,73 @@ export class NotesService {
     return {
       path: this.toRelativePath(absolutePath),
       bytesWritten: Buffer.byteLength(content, 'utf8'),
+    }
+  }
+
+  async writeAreaNote(areaName: string, fileName: string, content: string) {
+    const safeName = sanitizeProjectFileName(fileName)
+    const safeArea = areaName.trim().replace(/[/\\]/g, '-')
+
+    if (!safeArea) {
+      throw new Error('Area name is required.')
+    }
+
+    const relativePath = `Areas/${safeArea}/${safeName}`
+    const absolutePath = this.resolveNotePath(relativePath)
+
+    await this.recordHistorySnapshot(
+      `Created area note ${relativePath}`,
+      createActivityDetail(content),
+      [absolutePath],
+    )
+    await mkdir(path.dirname(absolutePath), { recursive: true })
+    await writeFile(absolutePath, ensureTrailingNewline(content), 'utf8')
+    await this.refreshIndexedPaths([absolutePath])
+    await this.activityStore.record({
+      kind: 'write',
+      title: `Created area note ${relativePath}`,
+      detail: createActivityDetail(content),
+      paths: [relativePath],
+    })
+
+    return {
+      path: relativePath,
+      status: 'created',
+    }
+  }
+
+  async appendAreaNote(areaName: string, fileName: string, content: string) {
+    const safeName = sanitizeProjectFileName(fileName)
+    const safeArea = areaName.trim().replace(/[/\\]/g, '-')
+
+    if (!safeArea) {
+      throw new Error('Area name is required.')
+    }
+
+    const relativePath = `Areas/${safeArea}/${safeName}`
+    const absolutePath = this.resolveNotePath(relativePath)
+    const existing = await readFile(absolutePath, 'utf8').catch(() => '')
+    const separator = existing.endsWith('\n') || existing.length === 0 ? '' : '\n'
+    const nextContent = `${existing}${separator}${content}\n`
+
+    await this.recordHistorySnapshot(
+      `Appended to area note ${relativePath}`,
+      createActivityDetail(content),
+      [absolutePath],
+    )
+    await mkdir(path.dirname(absolutePath), { recursive: true })
+    await writeFile(absolutePath, nextContent, 'utf8')
+    await this.refreshIndexedPaths([absolutePath])
+    await this.activityStore.record({
+      kind: 'write',
+      title: `Appended to area note ${relativePath}`,
+      detail: createActivityDetail(content),
+      paths: [relativePath],
+    })
+
+    return {
+      path: relativePath,
+      status: 'appended',
     }
   }
 
@@ -634,7 +706,7 @@ export class NotesService {
   ) {
     const safeProject = this.resolveProjectName(project)
     const safeFileName = sanitizeProjectFileName(fileName)
-    const relativePath = `projects/${safeProject}/${safeFileName}`
+    const relativePath = `Projects (Active)/${safeProject}/${safeFileName}`
     const absolutePath = this.resolveNotePath(relativePath)
     const existing = await readFile(absolutePath, 'utf8').catch(() =>
       createProjectNoteTemplate(safeProject, safeFileName),
@@ -718,7 +790,8 @@ export class NotesService {
   }
 
   private async ensureWorkspaceStructure(): Promise<void> {
-    await mkdir(path.join(this.config.notesPath, 'projects'), { recursive: true })
+    await mkdir(path.join(this.config.notesPath, 'Projects (Active)'), { recursive: true })
+    await mkdir(path.join(this.config.notesPath, 'Areas'), { recursive: true })
 
     for (const noteName of ROOT_NOTE_NAMES) {
       const absolutePath = this.resolveNotePath(noteName)
@@ -1138,7 +1211,9 @@ function deriveTitle(relativePath: string, content: string) {
 
 function getProjectName(relativePath: string) {
   const parts = relativePath.split('/')
-  const projectsIndex = parts.findIndex((part) => part === 'projects')
+  const projectsIndex = parts.findIndex(
+    (part) => part === 'projects' || part === 'Projects (Active)',
+  )
 
   if (projectsIndex === -1 || projectsIndex === parts.length - 1) {
     return null

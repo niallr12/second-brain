@@ -146,6 +146,20 @@ app.get('/api/history', (_request: Request, response: Response) => {
   })
 })
 
+app.post('/api/reindex', async (_request: Request, response: Response) => {
+  try {
+    const config = await notesService.rebuildIndex()
+    response.json({
+      ...config,
+      dashboard: notesService.getDashboard(),
+    })
+  } catch (error) {
+    response.status(500).json({
+      error: error instanceof Error ? error.message : 'Unable to rebuild the index.',
+    })
+  }
+})
+
 app.post('/api/actions', async (request: Request, response: Response) => {
   try {
     const result = await notesService.runQuickAction(request.body)

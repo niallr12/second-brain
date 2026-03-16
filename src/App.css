@@ -389,6 +389,111 @@
   font-weight: 600;
 }
 
+.summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.panel-add-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 1px solid rgba(16, 163, 127, 0.3);
+  border-radius: 8px;
+  background: rgba(16, 163, 127, 0.1);
+  color: #baf4e3;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.panel-add-button:hover {
+  background: rgba(16, 163, 127, 0.22);
+  border-color: rgba(16, 163, 127, 0.5);
+}
+
+.quick-add-form {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.85rem;
+  margin-bottom: 0.25rem;
+  padding: 0.75rem 0.8rem;
+  border-radius: 14px;
+  background: rgba(12, 17, 24, 0.8);
+  border: 1px solid rgba(16, 163, 127, 0.2);
+}
+
+.quick-add-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.quick-add-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  background: rgba(10, 14, 20, 0.84);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.quick-add-input::placeholder {
+  color: rgba(152, 166, 183, 0.72);
+}
+
+.quick-add-input:focus {
+  outline: 2px solid rgba(16, 163, 127, 0.18);
+  border-color: rgba(16, 163, 127, 0.52);
+}
+
+.quick-add-input:disabled {
+  opacity: 0.65;
+}
+
+.quick-add-toggle {
+  display: flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.quick-add-tab {
+  border: none;
+  background: rgba(19, 26, 35, 0.94);
+  color: var(--muted);
+  padding: 0.4rem 0.65rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+}
+
+.quick-add-tab + .quick-add-tab {
+  border-left: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.quick-add-tab-active {
+  background: rgba(16, 163, 127, 0.18);
+  color: #baf4e3;
+}
+
+.quick-add-feedback {
+  color: #baf4e3;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 .task-editor {
   width: 100%;
   display: grid;

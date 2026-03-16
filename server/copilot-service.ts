@@ -196,6 +196,7 @@ You are a notes operator for a solution architect's local PARA-style workspace.
 - \`update_root_item\` also supports optional due dates and follow-up dates for lightweight task tracking.
 - Prefer \`promote_inbox_item\` and \`defer_today_item\` for common list triage.
 - Prefer \`append_project_update\` and \`add_project_next_step\` for small project updates instead of rewriting full files.
+- Use \`write_area_note\` or \`append_area_note\` when the user asks to create or update notes under Areas. Areas are for ongoing reference material, how-to guides, and process documentation.
 - If the user asks to roll back the most recent mutation, use \`undo_last_change\`.
 - ${config.trustedMode
             ? 'Trusted mode is enabled. You may use full-file note tools when the task genuinely requires them, but prefer structured tools first.'
@@ -208,9 +209,17 @@ You are a notes operator for a solution architect's local PARA-style workspace.
       },
     } as const
 
-    const session = sessionId
-      ? await client.resumeSession(sessionId, sessionConfig)
-      : await client.createSession(sessionConfig)
+    let session: CopilotSession
+
+    if (sessionId) {
+      try {
+        session = await client.resumeSession(sessionId, sessionConfig)
+      } catch {
+        session = await client.createSession(sessionConfig)
+      }
+    } else {
+      session = await client.createSession(sessionConfig)
+    }
 
     this.sessions.set(session.sessionId, session)
     return session
@@ -334,6 +343,26 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           item: z.string().min(2).describe('Next step to record'),
         }),
         handler: async ({ project, item }) => this.notes.addProjectNextStep(project, item),
+      }),
+      defineTool('write_area_note', {
+        description: 'Create or replace a note under the Areas folder. Use this for reference notes, how-to guides, and ongoing area documentation.',
+        parameters: z.object({
+          area: z.string().min(1).describe('Area folder name, such as "engineering" or "finance"'),
+          fileName: z.string().min(1).default('note.md').describe('Markdown file name within the area'),
+          content: z.string().min(4).describe('Full markdown content for the note'),
+        }),
+        handler: async ({ area, fileName, content }) =>
+          this.notes.writeAreaNote(area, fileName, content),
+      }),
+      defineTool('append_area_note', {
+        description: 'Append content to an existing note under the Areas folder, or create it if it does not exist.',
+        parameters: z.object({
+          area: z.string().min(1).describe('Area folder name, such as "engineering" or "finance"'),
+          fileName: z.string().min(1).default('note.md').describe('Markdown file name within the area'),
+          content: z.string().min(4).describe('Markdown content to append'),
+        }),
+        handler: async ({ area, fileName, content }) =>
+          this.notes.appendAreaNote(area, fileName, content),
       }),
       defineTool('list_project_files', {
         description: 'List the files for a project folder under projects/.',
