@@ -133,6 +133,14 @@ function App() {
   })
 
   useEffect(() => {
+    return () => {
+      if (searchTimer.current) {
+        window.clearTimeout(searchTimer.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     if (!window.location.hash) {
       window.history.replaceState(null, '', '#/')
       setRoute('chat')

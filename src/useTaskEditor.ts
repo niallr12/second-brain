@@ -110,7 +110,7 @@ export function useTaskEditor(options: UseTaskEditorOptions) {
   }
 
   async function submitEditor() {
-    if (!taskEditor) {
+    if (!taskEditor || pendingRowKeys.includes(taskEditor.rowKey)) {
       return
     }
 

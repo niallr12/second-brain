@@ -22,6 +22,30 @@ const emailAssistSchema = z.object({
   incomingEmail: z.string().optional(),
   outputFormat: z.enum(['short-reply', 'full-reply', 'bullet-summary', 'reply-with-next-actions']).optional(),
 })
+const rootNoteNameSchema = z.enum(['TODAY.md', 'WAITING.md', 'INBOX.md'])
+const quickActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('capture-root-item'), target: rootNoteNameSchema, item: z.string().min(1) }),
+  z.object({ type: z.literal('move-root-item'), from: rootNoteNameSchema, to: rootNoteNameSchema, item: z.string().min(1) }),
+  z.object({ type: z.literal('promote-inbox-item'), item: z.string().min(1) }),
+  z.object({ type: z.literal('defer-today-item'), item: z.string().min(1) }),
+  z.object({ type: z.literal('mark-root-item-done'), target: rootNoteNameSchema, item: z.string().min(1) }),
+  z.object({
+    type: z.literal('update-root-item'),
+    target: rootNoteNameSchema,
+    item: z.string().min(1),
+    nextItem: z.string().optional(),
+    ticket: z.string().optional(),
+    link: z.string().optional(),
+    person: z.string().optional(),
+    context: z.string().optional(),
+    due: z.string().optional(),
+    followUpOn: z.string().optional(),
+    moveTo: rootNoteNameSchema.optional(),
+  }),
+  z.object({ type: z.literal('append-project-update'), project: z.string().min(1), update: z.string().min(1), fileName: z.string().optional(), heading: z.string().optional() }),
+  z.object({ type: z.literal('add-project-next-step'), project: z.string().min(1), item: z.string().min(1) }),
+  z.object({ type: z.literal('undo-last-change') }),
+])
 
 app.use(express.json({ limit: '2mb' }))
 
@@ -181,7 +205,8 @@ app.post('/api/reindex', async (_request: Request, response: Response) => {
 
 app.post('/api/actions', async (request: Request, response: Response) => {
   try {
-    const result = await notesService.runQuickAction(request.body)
+    const body = quickActionSchema.parse(request.body)
+    const result = await notesService.runQuickAction(body)
     response.json({
       result,
       dashboard: notesService.getDashboard(),

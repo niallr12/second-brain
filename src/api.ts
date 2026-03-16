@@ -37,6 +37,8 @@ export function clearStoredAccessKey() {
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const accessKey = getStoredAccessKey()
   const headers = new Headers(init?.headers)
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 120_000)
 
   headers.set('Content-Type', 'application/json')
 
@@ -44,20 +46,31 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     headers.set('x-second-brain-key', accessKey)
   }
 
-  const response = await fetch(input, {
-    ...init,
-    headers,
-  })
+  try {
+    const response = await fetch(input, {
+      ...init,
+      headers,
+      signal: init?.signal ?? controller.signal,
+    })
 
-  if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new ApiError(
-      error?.error ?? `Request failed with status ${response.status}`,
-      response.status,
-    )
+    if (!response.ok) {
+      const error = (await response.json().catch(() => null)) as { error?: string } | null
+      throw new ApiError(
+        error?.error ?? `Request failed with status ${response.status}`,
+        response.status,
+      )
+    }
+
+    return (await response.json()) as T
+  } catch (caughtError) {
+    if (caughtError instanceof DOMException && caughtError.name === 'AbortError') {
+      throw new ApiError('The request timed out. Please try again.', 408)
+    }
+
+    throw caughtError
+  } finally {
+    window.clearTimeout(timeout)
   }
-
-  return (await response.json()) as T
 }
 
 export function fetchAuthStatus() {
