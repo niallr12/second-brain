@@ -228,6 +228,11 @@ export class NotesService {
     }
   }
 
+  async getWeeklyContent(): Promise<string> {
+    const absolutePath = this.resolveNotePath('WEEKLY.md')
+    return readFile(absolutePath, 'utf8').catch(() => '')
+  }
+
   getOverviewForAssistant() {
     return {
       indexedAt: this.lastIndexedAt,

@@ -1071,3 +1071,79 @@
   text-align: center;
   margin: 0.5rem 0;
 }
+
+/* Weekly review page */
+.weekly-shell {
+  max-width: 720px;
+}
+
+.weekly-content {
+  margin-top: 1.5rem;
+}
+
+.weekly-panel {
+  padding: 1.5rem 1.75rem;
+}
+
+.weekly-parsed {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.weekly-title {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0 0 1.25rem;
+}
+
+.weekly-week-heading {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 1.5rem 0 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.weekly-week-heading:first-child {
+  margin-top: 0;
+}
+
+.weekly-day-heading {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 1rem 0 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.weekly-entry {
+  display: block;
+  font-size: 0.88rem;
+  color: var(--ink);
+  padding: 0.25rem 0 0.25rem 1rem;
+  position: relative;
+}
+
+.weekly-entry::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--muted);
+}
+
+.weekly-entry strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.weekly-text {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.25rem 0;
+}

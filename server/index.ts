@@ -148,6 +148,17 @@ app.get('/api/search', (request: Request, response: Response) => {
   }
 })
 
+app.get('/api/weekly', async (_request: Request, response: Response) => {
+  try {
+    const content = await notesService.getWeeklyContent()
+    response.json({ content })
+  } catch (error) {
+    response.status(500).json({
+      error: error instanceof Error ? error.message : 'Unable to read weekly log.',
+    })
+  }
+})
+
 app.get('/api/config', async (_request: Request, response: Response) => {
   response.json({
     ...notesService.getConfig(),

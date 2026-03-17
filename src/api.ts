@@ -146,6 +146,10 @@ export function runQuickAction(payload: QuickActionRequest) {
   })
 }
 
+export function fetchWeeklyLog() {
+  return request<{ content: string }>('/api/weekly')
+}
+
 export function searchNotes(query: string, limit?: number) {
   const params = new URLSearchParams({ q: query })
   if (limit !== undefined) {

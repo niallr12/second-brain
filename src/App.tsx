@@ -6,6 +6,7 @@ import {
   fetchAuthStatus,
   fetchConfig,
   fetchDashboard,
+  fetchWeeklyLog,
   improveEmail,
   rebuildIndex,
   runQuickAction,
@@ -31,7 +32,7 @@ import type {
 } from './types'
 
 type LoadingState = 'boot' | 'config' | 'action' | 'email' | null
-type AppRoute = 'chat' | 'workspace' | 'email'
+type AppRoute = 'chat' | 'workspace' | 'email' | 'weekly'
 type ChatPanelKey = 'recentActions' | 'currentTodos' | 'waiting'
 type ChatPanelState = Record<ChatPanelKey, boolean>
 type EmailOutputFormat = 'short-reply' | 'full-reply' | 'bullet-summary' | 'reply-with-next-actions'
@@ -93,6 +94,8 @@ function App() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const [searchBusy, setSearchBusy] = useState(false)
   const searchTimer = useRef<number | null>(null)
+  const [weeklyContent, setWeeklyContent] = useState<string | null>(null)
+  const [weeklyLoading, setWeeklyLoading] = useState(false)
   const [emailSubject, setEmailSubject] = useState('')
   const [incomingEmail, setIncomingEmail] = useState('')
   const [emailGoal, setEmailGoal] = useState('Improve the structure, clarity, and content while keeping the intent.')
@@ -369,6 +372,18 @@ function App() {
     }
   }
 
+  async function loadWeeklyLog() {
+    setWeeklyLoading(true)
+    try {
+      const response = await fetchWeeklyLog()
+      setWeeklyContent(response.content)
+    } catch {
+      setWeeklyContent('')
+    } finally {
+      setWeeklyLoading(false)
+    }
+  }
+
   function handleSearchInput(value: string) {
     setSearchQuery(value)
 
@@ -405,8 +420,13 @@ function App() {
   }
 
   function navigate(nextRoute: AppRoute) {
-    const nextHash =
-      nextRoute === 'workspace' ? '#/workspace' : nextRoute === 'email' ? '#/email' : '#/'
+    const hashMap: Record<AppRoute, string> = {
+      chat: '#/',
+      workspace: '#/workspace',
+      email: '#/email',
+      weekly: '#/weekly',
+    }
+    const nextHash = hashMap[nextRoute]
 
     if (window.location.hash === nextHash) {
       setRoute(nextRoute)
@@ -1370,6 +1390,52 @@ function App() {
     )
   }
 
+  if (route === 'weekly') {
+    if (weeklyContent === null && !weeklyLoading) {
+      void loadWeeklyLog()
+    }
+
+    return (
+      <main className="minimal-shell weekly-shell">
+        <header className="topbar minimal-topbar">
+          <div>
+            <p className="eyebrow">Second Brain</p>
+            <h1 className="topbar-title">Weekly Review</h1>
+          </div>
+          <div className="route-actions">
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void loadWeeklyLog()}
+              disabled={weeklyLoading}
+            >
+              {weeklyLoading ? 'Loading…' : 'Refresh'}
+            </button>
+            <button type="button" className="primary-button compact-button" onClick={() => navigate('chat')}>
+              Back to Chat
+            </button>
+          </div>
+        </header>
+
+        <section className="weekly-content">
+          {weeklyLoading ? (
+            <p className="empty-copy">Loading weekly log…</p>
+          ) : weeklyContent ? (
+            <div className="panel weekly-panel">
+              {parseWeeklyContent(weeklyContent)}
+            </div>
+          ) : (
+            <div className="panel weekly-panel">
+              <p className="empty-copy">No weekly entries yet. Complete tasks, update projects, or write area notes to start building your log.</p>
+            </div>
+          )}
+        </section>
+
+        {error ? <div className="error-banner">{error}</div> : null}
+      </main>
+    )
+  }
+
   return (
     <main className="minimal-shell">
       <header className="topbar minimal-topbar">
@@ -1396,6 +1462,9 @@ function App() {
           </button>
           <button type="button" className="secondary-button" onClick={() => navigate('email')}>
             Email Helper
+          </button>
+          <button type="button" className="secondary-button" onClick={() => navigate('weekly')}>
+            Weekly Review
           </button>
           <button type="button" className="secondary-button" onClick={() => navigate('workspace')}>
             Workspace View
@@ -1888,14 +1957,9 @@ function renderTaskMetadata(item: RootNoteItem) {
 }
 
 function getRouteFromHash(hash: string): AppRoute {
-  if (hash === '#/workspace') {
-    return 'workspace'
-  }
-
-  if (hash === '#/email') {
-    return 'email'
-  }
-
+  if (hash === '#/workspace') return 'workspace'
+  if (hash === '#/email') return 'email'
+  if (hash === '#/weekly') return 'weekly'
   return 'chat'
 }
 
@@ -1920,6 +1984,43 @@ function loadChatPanelState(): ChatPanelState {
   } catch {
     return DEFAULT_CHAT_PANEL_STATE
   }
+}
+
+function parseWeeklyContent(content: string) {
+  const lines = content.split('\n')
+  const elements: React.ReactNode[] = []
+  let key = 0
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    if (trimmed.startsWith('# ') && !trimmed.startsWith('## ')) {
+      elements.push(<h2 key={key++} className="weekly-title">{trimmed.slice(2)}</h2>)
+    } else if (trimmed.startsWith('## ')) {
+      elements.push(<h3 key={key++} className="weekly-week-heading">{trimmed.slice(3)}</h3>)
+    } else if (trimmed.startsWith('### ')) {
+      elements.push(<h4 key={key++} className="weekly-day-heading">{trimmed.slice(4)}</h4>)
+    } else if (trimmed.startsWith('- ')) {
+      elements.push(<li key={key++} className="weekly-entry">{renderWeeklyEntryText(trimmed.slice(2))}</li>)
+    } else {
+      elements.push(<p key={key++} className="weekly-text">{trimmed}</p>)
+    }
+  }
+
+  return <div className="weekly-parsed">{elements}</div>
+}
+
+function renderWeeklyEntryText(text: string) {
+  const boldMatch = text.match(/^\*\*(.+?)\*\*:\s*(.+)$/)
+  if (boldMatch) {
+    return (
+      <>
+        <strong>{boldMatch[1]}</strong>: {boldMatch[2]}
+      </>
+    )
+  }
+  return text
 }
 
 function formatTime(value: string) {
