@@ -411,6 +411,7 @@ export class NotesService {
       detail: createActivityDetail(content),
       paths: [relativePath],
     })
+    await this.appendWeeklyEntry(`Area: ${safeArea}`, `Created ${safeName}`)
 
     return {
       path: relativePath,
@@ -446,6 +447,7 @@ export class NotesService {
       detail: createActivityDetail(content),
       paths: [relativePath],
     })
+    await this.appendWeeklyEntry(`Area: ${safeArea}`, `Updated ${safeName}`)
 
     return {
       path: relativePath,
@@ -584,6 +586,7 @@ export class NotesService {
       detail: itemText,
       paths: [noteName],
     })
+    await this.appendWeeklyEntry('Completed', itemText)
 
     return {
       path: noteName,
@@ -729,6 +732,7 @@ export class NotesService {
       detail: update.trim(),
       paths: [relativePath],
     })
+    await this.appendWeeklyEntry(`Project: ${safeProject}`, update.trim())
 
     return {
       path: relativePath,
@@ -1110,6 +1114,58 @@ export class NotesService {
       rootNotesPresent,
       missingRootNotes,
       warnings,
+    }
+  }
+
+  private async appendWeeklyEntry(category: string, detail: string) {
+    try {
+      const absolutePath = this.resolveNotePath('WEEKLY.md')
+      const existing = await readFile(absolutePath, 'utf8').catch(() => '# Weekly Log\n')
+      const now = new Date()
+      const weekHeading = getWeekHeading(now)
+      const dayLabel = now.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'short' })
+      const entry = `- **${category}**: ${detail.trim()}`
+
+      let content = existing.trimEnd()
+
+      if (!content.includes(weekHeading)) {
+        content = `${content}\n\n${weekHeading}\n`
+      }
+
+      const lines = content.split('\n')
+      const weekIndex = lines.findIndex((line) => line.trim() === weekHeading)
+      let dayHeading = `### ${dayLabel}`
+      let dayIndex = -1
+
+      for (let i = weekIndex + 1; i < lines.length; i++) {
+        if (lines[i].startsWith('## Week of ')) break
+        if (lines[i].trim() === dayHeading) {
+          dayIndex = i
+          break
+        }
+      }
+
+      if (dayIndex === -1) {
+        let insertAt = weekIndex + 1
+        while (insertAt < lines.length && lines[insertAt].trim() === '') {
+          insertAt++
+        }
+        lines.splice(insertAt, 0, '', dayHeading, '', entry)
+      } else {
+        let insertAt = dayIndex + 1
+        while (insertAt < lines.length && lines[insertAt].trim() === '') {
+          insertAt++
+        }
+        while (insertAt < lines.length && lines[insertAt].startsWith('- ')) {
+          insertAt++
+        }
+        lines.splice(insertAt, 0, entry)
+      }
+
+      await writeFile(absolutePath, ensureTrailingNewline(lines.join('\n')), 'utf8')
+      await this.refreshIndexedPaths([absolutePath])
+    } catch (error) {
+      console.warn('Failed to append weekly entry:', error instanceof Error ? error.message : error)
     }
   }
 
@@ -1802,4 +1858,13 @@ function appendUnderHeading(content: string, heading: string, line: string) {
   const nextLines = [...lines]
   nextLines.splice(insertIndex, 0, line)
   return nextLines.join('\n')
+}
+
+function getWeekHeading(date: Date) {
+  const day = date.getDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  const monday = new Date(date)
+  monday.setDate(date.getDate() + mondayOffset)
+  const label = monday.toLocaleDateString('en-IE', { day: 'numeric', month: 'long', year: 'numeric' })
+  return `## Week of ${label}`
 }
