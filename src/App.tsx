@@ -6,6 +6,7 @@ import {
   fetchAuthStatus,
   fetchConfig,
   fetchDashboard,
+  fetchNoteContent,
   fetchWeeklyLog,
   improveEmail,
   rebuildIndex,
@@ -102,6 +103,10 @@ function App() {
   const [emailOutputFormat, setEmailOutputFormat] = useState<EmailOutputFormat>('full-reply')
   const [emailDraft, setEmailDraft] = useState('')
   const [emailResult, setEmailResult] = useState<EmailAssistResponse | null>(null)
+  const [openNotePath, setOpenNotePath] = useState<string | null>(null)
+  const [openNoteContent, setOpenNoteContent] = useState('')
+  const [openNoteLoading, setOpenNoteLoading] = useState(false)
+  const [openNoteError, setOpenNoteError] = useState<string | null>(null)
 
   const handleUnauthorized = useCallback(async (message: string) => {
     clearStoredAccessKey()
@@ -417,6 +422,40 @@ function App() {
     }
 
     await chat.submitPrompt(workflowPrompt)
+  }
+
+  async function handleOpenNote(notePath: string) {
+    const trimmedPath = notePath.trim()
+
+    if (!trimmedPath) {
+      return
+    }
+
+    setOpenNotePath(trimmedPath)
+    setOpenNoteContent('')
+    setOpenNoteError(null)
+    setOpenNoteLoading(true)
+
+    try {
+      const response = await fetchNoteContent(trimmedPath)
+      setOpenNotePath(response.path)
+      setOpenNoteContent(response.content)
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+      }
+
+      setOpenNoteError(caughtError instanceof Error ? caughtError.message : 'Unable to open note.')
+    } finally {
+      setOpenNoteLoading(false)
+    }
+  }
+
+  function closeOpenNote() {
+    setOpenNotePath(null)
+    setOpenNoteContent('')
+    setOpenNoteError(null)
+    setOpenNoteLoading(false)
   }
 
   function navigate(nextRoute: AppRoute) {
@@ -1524,6 +1563,20 @@ function App() {
                     <span>{message.role === 'user' ? 'You' : 'Assistant'}</span>
                   </div>
                   <pre>{message.content}</pre>
+                  {message.role === 'assistant' ? (
+                    <div className="message-note-actions">
+                      {extractSourcePaths(message.content).map((sourcePath) => (
+                        <button
+                          key={`${message.id}-${sourcePath}`}
+                          type="button"
+                          className="mini-action-button mini-action-button-secondary"
+                          onClick={() => void handleOpenNote(sourcePath)}
+                        >
+                          Open {sourcePath}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   {message.toolCalls?.length ? (
                     <div className="tool-trace">
                       {message.toolCalls.map((toolCall, index) => (
@@ -1594,6 +1647,13 @@ function App() {
                   <p>{result.excerpt}</p>
                   <footer>
                     <span>{result.path}</span>
+                    <button
+                      type="button"
+                      className="mini-action-button mini-action-button-secondary"
+                      onClick={() => void handleOpenNote(result.path)}
+                    >
+                      Open note
+                    </button>
                     {result.updatedAt ? <span>{formatTime(result.updatedAt)}</span> : null}
                   </footer>
                 </article>
@@ -1917,6 +1977,28 @@ function App() {
         </section>
       </section>
 
+      {openNotePath ? (
+        <div className="note-viewer-overlay" role="dialog" aria-modal="true" aria-label={`Viewing ${openNotePath}`}>
+          <div className="note-viewer-panel">
+            <header className="note-viewer-header">
+              <strong>{openNotePath}</strong>
+              <button
+                type="button"
+                className="secondary-button compact-button"
+                onClick={closeOpenNote}
+              >
+                Close
+              </button>
+            </header>
+            {openNoteLoading ? <p className="note-viewer-status">Loading note…</p> : null}
+            {openNoteError ? <p className="note-viewer-status note-viewer-error">{openNoteError}</p> : null}
+            {!openNoteLoading && !openNoteError ? (
+              <pre className="note-viewer-content">{openNoteContent || 'This note is empty.'}</pre>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {actionMessage ? <div className="success-banner">{actionMessage}</div> : null}
       {error ? <div className="error-banner">{error}</div> : null}
     </main>
@@ -1961,6 +2043,23 @@ function getRouteFromHash(hash: string): AppRoute {
   if (hash === '#/email') return 'email'
   if (hash === '#/weekly') return 'weekly'
   return 'chat'
+}
+
+function extractSourcePaths(content: string): string[] {
+  const lines = content.split('\n')
+  const sourceLine = lines.find((line) => /^sources:/i.test(line.trim()))
+
+  if (!sourceLine) {
+    return []
+  }
+
+  const sourceText = sourceLine.replace(/^sources:\s*/i, '')
+  const candidates = sourceText.split(',').map((value) => value.trim())
+  const paths = candidates
+    .map((candidate) => candidate.replace(/[`"'*]/g, '').split('#')[0].trim())
+    .filter((candidate) => candidate.endsWith('.md') && !candidate.includes(' '))
+
+  return [...new Set(paths)]
 }
 
 function isRunningStandalone() {

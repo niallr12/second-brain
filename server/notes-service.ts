@@ -1139,7 +1139,7 @@ export class NotesService {
 
       const lines = content.split('\n')
       const weekIndex = lines.findIndex((line) => line.trim() === weekHeading)
-      let dayHeading = `### ${dayLabel}`
+      const dayHeading = `### ${dayLabel}`
       let dayIndex = -1
 
       for (let i = weekIndex + 1; i < lines.length; i++) {
