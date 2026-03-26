@@ -148,6 +148,24 @@ app.get('/api/search', (request: Request, response: Response) => {
   }
 })
 
+app.get('/api/notes/read', async (request: Request, response: Response) => {
+  try {
+    const notePath = typeof request.query.path === 'string' ? request.query.path.trim() : ''
+
+    if (!notePath) {
+      response.status(400).json({ error: 'The "path" query parameter is required.' })
+      return
+    }
+
+    const note = await notesService.readNote(notePath)
+    response.json(note)
+  } catch (error) {
+    response.status(400).json({
+      error: error instanceof Error ? error.message : 'Unable to read note.',
+    })
+  }
+})
+
 app.get('/api/weekly', async (_request: Request, response: Response) => {
   try {
     const content = await notesService.getWeeklyContent()

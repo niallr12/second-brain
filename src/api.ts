@@ -6,6 +6,7 @@ import type {
   DashboardResponse,
   EmailAssistResponse,
   HistoryEntry,
+  NoteContentResponse,
   QuickActionRequest,
   QuickActionResponse,
   SearchResponse,
@@ -156,4 +157,9 @@ export function searchNotes(query: string, limit?: number) {
     params.set('limit', String(limit))
   }
   return request<SearchResponse>(`/api/search?${params.toString()}`)
+}
+
+export function fetchNoteContent(notePath: string) {
+  const params = new URLSearchParams({ path: notePath })
+  return request<NoteContentResponse>(`/api/notes/read?${params.toString()}`)
 }

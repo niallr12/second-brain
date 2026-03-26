@@ -169,3 +169,8 @@ export interface SearchResponse {
   query: string
   results: SearchResult[]
 }
+
+export interface NoteContentResponse {
+  path: string
+  content: string
+}
