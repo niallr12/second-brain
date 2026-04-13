@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import './App.css'
 import {
   ApiError,
@@ -37,6 +39,7 @@ type AppRoute = 'chat' | 'workspace' | 'email' | 'weekly'
 type ChatPanelKey = 'recentActions' | 'currentTodos' | 'waiting'
 type ChatPanelState = Record<ChatPanelKey, boolean>
 type EmailOutputFormat = 'short-reply' | 'full-reply' | 'bullet-summary' | 'reply-with-next-actions'
+type NoteViewerMode = 'rendered' | 'markdown'
 
 const QUICK_WORKFLOWS = [
   {
@@ -107,6 +110,7 @@ function App() {
   const [openNoteContent, setOpenNoteContent] = useState('')
   const [openNoteLoading, setOpenNoteLoading] = useState(false)
   const [openNoteError, setOpenNoteError] = useState<string | null>(null)
+  const [openNoteMode, setOpenNoteMode] = useState<NoteViewerMode>('rendered')
 
   const handleUnauthorized = useCallback(async (message: string) => {
     clearStoredAccessKey()
@@ -1765,7 +1769,7 @@ function App() {
                             return (
                               <div key={`${note.fileName}-${item.text}`} className="compact-task-row">
                                 <div className="task-content">
-                                  <span>{item.text}</span>
+                                  {renderTaskTitle(note.fileName, item)}
                                   {renderTaskMetadata(item)}
                                 </div>
                                 <div className="mini-action-row">
@@ -1900,7 +1904,7 @@ function App() {
                         return (
                           <div key={`waiting-panel-${item.text}`} className="compact-task-row">
                             <div className="task-content">
-                              <span>{item.text}</span>
+                              {renderTaskTitle('WAITING.md', item)}
                               {renderTaskMetadata(item)}
                             </div>
                             <div className="mini-action-row">
@@ -1982,18 +1986,50 @@ function App() {
           <div className="note-viewer-panel">
             <header className="note-viewer-header">
               <strong>{openNotePath}</strong>
-              <button
-                type="button"
-                className="secondary-button compact-button"
-                onClick={closeOpenNote}
-              >
-                Close
-              </button>
+              <div className="note-viewer-actions">
+                <div className="note-viewer-toggle" aria-label="Note viewer mode">
+                  <button
+                    type="button"
+                    className={openNoteMode === 'rendered' ? 'note-viewer-toggle-active' : ''}
+                    aria-pressed={openNoteMode === 'rendered'}
+                    onClick={() => setOpenNoteMode('rendered')}
+                  >
+                    Rendered
+                  </button>
+                  <button
+                    type="button"
+                    className={openNoteMode === 'markdown' ? 'note-viewer-toggle-active' : ''}
+                    aria-pressed={openNoteMode === 'markdown'}
+                    onClick={() => setOpenNoteMode('markdown')}
+                  >
+                    Markdown
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button compact-button"
+                  onClick={closeOpenNote}
+                >
+                  Close
+                </button>
+              </div>
             </header>
             {openNoteLoading ? <p className="note-viewer-status">Loading note…</p> : null}
             {openNoteError ? <p className="note-viewer-status note-viewer-error">{openNoteError}</p> : null}
             {!openNoteLoading && !openNoteError ? (
-              <pre className="note-viewer-content">{openNoteContent || 'This note is empty.'}</pre>
+              openNoteMode === 'markdown' ? (
+                <pre className="note-viewer-content">{openNoteContent || 'This note is empty.'}</pre>
+              ) : (
+                <div className="note-viewer-content note-viewer-rendered">
+                  {openNoteContent.trim() ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {openNoteContent}
+                    </ReactMarkdown>
+                  ) : (
+                    <p className="note-viewer-empty">This note is empty.</p>
+                  )}
+                </div>
+              )
             ) : null}
           </div>
         </div>
@@ -2038,6 +2074,25 @@ function renderTaskMetadata(item: RootNoteItem) {
   return <p className="task-metadata">{metadataBits.join(' • ')}</p>
 }
 
+function renderTaskTitle(noteName: RootNoteName, item: RootNoteItem) {
+  const showStaleWarning = noteName === 'TODAY.md' && isTodayItemStale(item)
+
+  return (
+    <span className="task-title-row">
+      <span>{item.text}</span>
+      {showStaleWarning ? (
+        <span
+          className="stale-task-indicator"
+          title="This item has been on Today for more than 3 days."
+          aria-label="This item has been on Today for more than 3 days."
+        >
+          !
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
 function getRouteFromHash(hash: string): AppRoute {
   if (hash === '#/workspace') return 'workspace'
   if (hash === '#/email') return 'email'
@@ -2057,9 +2112,42 @@ function extractSourcePaths(content: string): string[] {
   const candidates = sourceText.split(',').map((value) => value.trim())
   const paths = candidates
     .map((candidate) => candidate.replace(/[`"'*]/g, '').split('#')[0].trim())
-    .filter((candidate) => candidate.endsWith('.md') && !candidate.includes(' '))
+    .filter((candidate) => candidate.endsWith('.md'))
 
   return [...new Set(paths)]
+}
+
+function isTodayItemStale(item: RootNoteItem) {
+  const addedOn = item.metadata.addedOn?.trim()
+
+  if (!addedOn) {
+    return false
+  }
+
+  const addedOnDate = parseDateOnlyAsUtc(addedOn)
+
+  if (addedOnDate === null) {
+    return false
+  }
+
+  const now = new Date()
+  const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  const ageInDays = Math.floor((todayUtc - addedOnDate) / 86_400_000)
+  return ageInDays > 3
+}
+
+function parseDateOnlyAsUtc(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+
+  if (!match) {
+    return null
+  }
+
+  const year = Number(match[1])
+  const monthIndex = Number(match[2]) - 1
+  const day = Number(match[3])
+
+  return Date.UTC(year, monthIndex, day)
 }
 
 function isRunningStandalone() {

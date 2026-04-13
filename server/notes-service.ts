@@ -59,6 +59,7 @@ interface RootNoteMetadata {
   context?: string
   due?: string
   followUpOn?: string
+  addedOn?: string
 }
 
 interface RootNoteItem {
@@ -480,7 +481,7 @@ export class NotesService {
       serializeRootNoteItem(noteName, {
         text: item,
         done: false,
-        metadata: {},
+        metadata: buildRootNoteMetadataForDestination({}, noteName, true),
       }),
       createRootNoteTemplate(noteName),
     )
@@ -534,6 +535,7 @@ export class NotesService {
         serializeRootNoteItem(to, {
           ...sourceBlock.item,
           done: false,
+          metadata: buildRootNoteMetadataForDestination(sourceBlock.item.metadata, to, true),
         }),
         createRootNoteTemplate(to),
       )
@@ -635,6 +637,7 @@ export class NotesService {
         ...(patch.context !== undefined ? { context: patch.context } : {}),
         ...(patch.due !== undefined ? { due: patch.due } : {}),
         ...(patch.followUpOn !== undefined ? { followUpOn: patch.followUpOn } : {}),
+        addedOn: sourceBlock.item.metadata.addedOn,
       }),
     }
     const destinationNote = patch.moveTo ?? noteName
@@ -684,6 +687,11 @@ export class NotesService {
         serializeRootNoteItem(destinationNote, {
           ...nextItem,
           done: false,
+          metadata: buildRootNoteMetadataForDestination(
+            nextItem.metadata,
+            destinationNote,
+            destinationNote === 'TODAY.md',
+          ),
         }),
         createRootNoteTemplate(destinationNote),
       )
@@ -715,7 +723,7 @@ export class NotesService {
   ) {
     const safeProject = this.resolveProjectName(project)
     const safeFileName = sanitizeProjectFileName(fileName)
-    const relativePath = `Projects (Active)/${safeProject}/${safeFileName}`
+    const relativePath = await this.getProjectRelativePath(safeProject, safeFileName)
     const absolutePath = this.resolveNotePath(relativePath)
     const existing = await readFile(absolutePath, 'utf8').catch(() =>
       createProjectNoteTemplate(safeProject, safeFileName),
@@ -752,6 +760,64 @@ export class NotesService {
 
   async deferTodayItemToWaiting(item: string) {
     return this.moveRootItem('TODAY.md', 'WAITING.md', item)
+  }
+
+  async createProject(project: string, options?: { summary?: string; nextSteps?: string[] }) {
+    const safeProject = slugify(project)
+
+    if (!safeProject) {
+      throw new Error('Project name is required.')
+    }
+
+    if (this.documents.some((document) => document.project === safeProject)) {
+      throw new Error(`Project "${project}" already exists.`)
+    }
+
+    const projectRoot = await this.getProjectRootDirectory(safeProject)
+    const statusPath = `${projectRoot}/${safeProject}/status.md`
+    const nextStepsPath = `${projectRoot}/${safeProject}/next-steps.md`
+    const statusAbsolutePath = this.resolveNotePath(statusPath)
+    const nextStepsAbsolutePath = this.resolveNotePath(nextStepsPath)
+    const nextSteps = options?.nextSteps?.map((step) => step.trim()).filter((step) => step.length > 0) ?? []
+
+    await this.recordHistorySnapshot(
+      `Created project ${safeProject}`,
+      options?.summary?.trim() || 'Created project workspace.',
+      [statusAbsolutePath, nextStepsAbsolutePath],
+    )
+    await mkdir(path.dirname(statusAbsolutePath), { recursive: true })
+    await writeFile(
+      statusAbsolutePath,
+      createProjectStatusTemplate(safeProject, options?.summary),
+      { encoding: 'utf8', flag: 'wx' },
+    ).catch((error) => {
+      if (!isAlreadyExistsError(error)) {
+        throw error
+      }
+    })
+    await writeFile(
+      nextStepsAbsolutePath,
+      createProjectNextStepsTemplate(safeProject, nextSteps),
+      { encoding: 'utf8', flag: 'wx' },
+    ).catch((error) => {
+      if (!isAlreadyExistsError(error)) {
+        throw error
+      }
+    })
+    await this.refreshIndexedPaths([statusAbsolutePath, nextStepsAbsolutePath])
+    await this.activityStore.record({
+      kind: 'write',
+      title: `Created project ${safeProject}`,
+      detail: options?.summary?.trim() || 'Created status and next-step notes.',
+      paths: [statusPath, nextStepsPath],
+    })
+    await this.appendWeeklyEntry(`Project: ${safeProject}`, 'Created project workspace')
+
+    return {
+      project: safeProject,
+      paths: [statusPath, nextStepsPath],
+      status: 'created',
+    }
   }
 
   async addProjectNextStep(project: string, item: string) {
@@ -1290,6 +1356,60 @@ export class NotesService {
 
     return matchedProjects
   }
+
+  private async getProjectRelativePath(project: string, fileName: string) {
+    const projectRoot = await this.getProjectRootDirectory(project)
+    return `${projectRoot}/${project}/${fileName}`
+  }
+
+  private async getProjectRootDirectory(project: string) {
+    const existingProjectRoot = this.getExistingProjectRootDirectory(project)
+
+    if (existingProjectRoot) {
+      return existingProjectRoot
+    }
+
+    const indexedProjectRoots = [...new Set(
+      this.documents.reduce<Array<'projects' | 'Projects (Active)'>>((roots, document) => {
+        const projectRoot = getProjectsDirectoryName(document.relativePath)
+
+        if (projectRoot) {
+          roots.push(projectRoot)
+        }
+
+        return roots
+      }, []),
+    )]
+
+    if (indexedProjectRoots.includes('projects')) {
+      return 'projects'
+    }
+
+    if (indexedProjectRoots.includes('Projects (Active)')) {
+      return 'Projects (Active)'
+    }
+
+    const legacyProjectsPath = path.join(this.config.notesPath, 'projects')
+    const hasLegacyProjectsDirectory = await stat(legacyProjectsPath)
+      .then((stats) => stats.isDirectory())
+      .catch(() => false)
+
+    if (hasLegacyProjectsDirectory) {
+      return 'projects'
+    }
+
+    return 'Projects (Active)'
+  }
+
+  private getExistingProjectRootDirectory(project: string) {
+    const document = this.documents.find((entry) => entry.project === project)
+
+    if (!document) {
+      return null
+    }
+
+    return getProjectsDirectoryName(document.relativePath)
+  }
 }
 
 async function findMarkdownFiles(rootPath: string): Promise<string[]> {
@@ -1336,6 +1456,11 @@ function getProjectName(relativePath: string) {
   }
 
   return slugify(parts[projectsIndex + 1])
+}
+
+function getProjectsDirectoryName(relativePath: string) {
+  const parts = relativePath.split('/')
+  return parts.find((part) => part === 'projects' || part === 'Projects (Active)') ?? null
 }
 
 function parseAliases(frontmatter: unknown) {
@@ -1766,18 +1891,24 @@ function isRootNoteItemLine(line: string) {
 }
 
 function isRootNoteMetadataLine(line: string) {
-  return /^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up):\s+.+$/i.test(line)
+  return /^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up|added):\s+.+$/i.test(line)
 }
 
 function parseRootNoteMetadataLine(line: string) {
-  const match = line.match(/^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up):\s+(.+)$/i)
+  const match = line.match(/^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up|added):\s+(.+)$/i)
 
   if (!match) {
     return null
   }
 
   return {
-    key: (match[1].toLowerCase() === 'follow-up' ? 'followUpOn' : match[1].toLowerCase()) as keyof RootNoteMetadata,
+    key: (
+      match[1].toLowerCase() === 'follow-up'
+        ? 'followUpOn'
+        : match[1].toLowerCase() === 'added'
+          ? 'addedOn'
+          : match[1].toLowerCase()
+    ) as keyof RootNoteMetadata,
     value: match[2].trim(),
   }
 }
@@ -1789,6 +1920,7 @@ function normalizeRootNoteMetadata(metadata: RootNoteMetadata): RootNoteMetadata
   const normalizedContext = normalizeRootNoteMetadataValue(metadata.context)
   const normalizedDue = normalizeRootNoteMetadataValue(metadata.due)
   const normalizedFollowUpOn = normalizeRootNoteMetadataValue(metadata.followUpOn)
+  const normalizedAddedOn = normalizeRootNoteMetadataValue(metadata.addedOn)
 
   return {
     ...(normalizedTicket ? { ticket: normalizedTicket } : {}),
@@ -1797,6 +1929,7 @@ function normalizeRootNoteMetadata(metadata: RootNoteMetadata): RootNoteMetadata
     ...(normalizedContext ? { context: normalizedContext } : {}),
     ...(normalizedDue ? { due: normalizedDue } : {}),
     ...(normalizedFollowUpOn ? { followUpOn: normalizedFollowUpOn } : {}),
+    ...(normalizedAddedOn ? { addedOn: normalizedAddedOn } : {}),
   }
 }
 
@@ -1807,6 +1940,7 @@ function rootNoteMetadataEntries(metadata: RootNoteMetadata) {
     ['link', metadata.link],
     ['due', metadata.due],
     ['follow-up', metadata.followUpOn],
+    ['added', metadata.addedOn],
     ['context', metadata.context],
   ] as const)
     .flatMap((key) => {
@@ -1816,6 +1950,21 @@ function rootNoteMetadataEntries(metadata: RootNoteMetadata) {
 
 function normalizeRootNoteMetadataValue(value?: string) {
   return value?.replace(/\s+/g, ' ').trim() ?? ''
+}
+
+function buildRootNoteMetadataForDestination(
+  metadata: RootNoteMetadata,
+  noteName: RootNoteName,
+  resetAddedOn = false,
+) {
+  return normalizeRootNoteMetadata({
+    ...metadata,
+    addedOn: noteName === 'TODAY.md'
+      ? resetAddedOn || !metadata.addedOn
+        ? getCurrentDateStamp()
+        : metadata.addedOn
+      : undefined,
+  })
 }
 
 function sanitizeProjectFileName(fileName: string) {
@@ -1835,6 +1984,43 @@ function createProjectNoteTemplate(project: string, fileName: string) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase())}`.trim()
 
   return `# ${title}\n`
+}
+
+function createProjectStatusTemplate(project: string, summary?: string) {
+  const summaryBlock = summary?.trim() ? `${summary.trim()}\n` : ''
+  return ensureTrailingNewline([
+    createProjectNoteTemplate(project, 'status.md').trimEnd(),
+    '',
+    '## Summary',
+    '',
+    summaryBlock.trimEnd(),
+    summaryBlock ? '' : '',
+    '## Updates',
+    '',
+    `- ${getCurrentDateStamp()}: Project created.`,
+  ].filter((line, index, lines) => !(line === '' && lines[index - 1] === '')).join('\n'))
+}
+
+function createProjectNextStepsTemplate(project: string, nextSteps: string[]) {
+  const nextStepLines = nextSteps.length > 0
+    ? nextSteps.map((step) => `- [ ] ${step}`)
+    : []
+
+  return ensureTrailingNewline([
+    createProjectNoteTemplate(project, 'next-steps.md').trimEnd(),
+    '',
+    '## Next Steps',
+    '',
+    ...nextStepLines,
+  ].join('\n'))
+}
+
+function getCurrentDateStamp() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function isAlreadyExistsError(error: unknown) {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST'
 }
 
 function appendUnderHeading(content: string, heading: string, line: string) {

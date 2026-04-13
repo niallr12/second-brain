@@ -7,6 +7,7 @@ export interface RootNoteMetadata {
   context?: string
   due?: string
   followUpOn?: string
+  addedOn?: string
 }
 
 export interface RootNoteItem {

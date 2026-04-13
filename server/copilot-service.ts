@@ -195,6 +195,7 @@ You are a notes operator for a solution architect's local PARA-style workspace.
 - Prefer \`update_root_item\` when you need to add lightweight task metadata such as ticket IDs, links, people, or short context notes, or when updating a task before moving it.
 - \`update_root_item\` also supports optional due dates and follow-up dates for lightweight task tracking.
 - Prefer \`promote_inbox_item\` and \`defer_today_item\` for common list triage.
+- Use \`create_project\` when the user asks to start a new project or scaffold a new project workspace.
 - Prefer \`append_project_update\` and \`add_project_next_step\` for small project updates instead of rewriting full files.
 - Use \`write_area_note\` or \`append_area_note\` when the user asks to create or update notes under Areas. Areas are for ongoing reference material, how-to guides, and process documentation.
 - If the user asks to roll back the most recent mutation, use \`undo_last_change\`.
@@ -320,6 +321,15 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           item: z.string().min(2).describe('Task text to defer'),
         }),
         handler: async ({ item }) => this.notes.deferTodayItemToWaiting(item),
+      }),
+      defineTool('create_project', {
+        description: 'Create a new project folder with starter project notes.',
+        parameters: z.object({
+          project: z.string().min(2).describe('Project name or folder name'),
+          summary: z.string().min(4).optional().describe('Optional short description for the project status note'),
+          nextSteps: z.array(z.string().min(2)).max(8).optional().describe('Optional initial next-step checklist items'),
+        }),
+        handler: async ({ project, summary, nextSteps }) => this.notes.createProject(project, { summary, nextSteps }),
       }),
       defineTool('undo_last_change', {
         description: 'Undo the most recent note mutation.',
