@@ -112,6 +112,7 @@ function getPanelsForToolCalls(toolCalls: ChatToolCall[]): Partial<ChatPanelStat
     'mark_root_item_done',
     'promote_inbox_item',
     'defer_today_item',
+    'promote_today_item_to_project',
     'update_root_item',
     'append_project_update',
     'add_project_next_step',
@@ -126,7 +127,7 @@ function getPanelsForToolCalls(toolCalls: ChatToolCall[]): Partial<ChatPanelStat
 
   if (
     completedToolNames.some((toolName) =>
-      ['capture_root_item', 'move_root_item', 'mark_root_item_done', 'promote_inbox_item', 'defer_today_item', 'update_root_item', 'undo_last_change'].includes(toolName),
+      ['capture_root_item', 'move_root_item', 'mark_root_item_done', 'promote_inbox_item', 'defer_today_item', 'promote_today_item_to_project', 'update_root_item', 'undo_last_change'].includes(toolName),
     )
   ) {
     nextState.currentTodos = true

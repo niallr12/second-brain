@@ -1,4 +1,6 @@
 export type RootNoteName = 'TODAY.md' | 'WAITING.md' | 'INBOX.md'
+export type TodayLane = 'critical' | 'should-do' | 'can-wait'
+export type ProjectHealthStatus = 'active' | 'at-risk' | 'stalled'
 
 export interface RootNoteMetadata {
   ticket?: string
@@ -8,6 +10,9 @@ export interface RootNoteMetadata {
   due?: string
   followUpOn?: string
   addedOn?: string
+  important?: boolean
+  lane?: TodayLane
+  project?: string
 }
 
 export interface RootNoteItem {
@@ -84,6 +89,10 @@ export interface ProjectSummary {
   lastUpdated: string | null
   highlights: string[]
   aliases: string[]
+  status: ProjectHealthStatus
+  healthReason: string
+  openNextSteps: number
+  linkedWaitingCount: number
 }
 
 export interface UrgentItem {
@@ -144,7 +153,8 @@ export type QuickActionRequest =
   | { type: 'promote-inbox-item'; item: string }
   | { type: 'defer-today-item'; item: string }
   | { type: 'mark-root-item-done'; target: RootNoteName; item: string }
-  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; due?: string; followUpOn?: string; moveTo?: RootNoteName }
+  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; due?: string; followUpOn?: string; important?: boolean; lane?: TodayLane; project?: string; moveTo?: RootNoteName }
+  | { type: 'promote-today-item-to-project'; item: string; project: string; summary?: string }
   | { type: 'append-project-update'; project: string; update: string; fileName?: string; heading?: string }
   | { type: 'add-project-next-step'; project: string; item: string }
   | { type: 'undo-last-change' }
@@ -174,4 +184,39 @@ export interface SearchResponse {
 export interface NoteContentResponse {
   path: string
   content: string
+}
+
+export interface NoteContextResponse {
+  path: string
+  relatedNotes: Array<{
+    path: string
+    title: string
+    updatedAt: string | null
+    reason: string
+  }>
+  linkedTasks: Array<{
+    text: string
+    noteName: RootNoteName
+    important: boolean
+    project?: string
+  }>
+}
+
+export interface DayPlanResponse {
+  summary: string
+  deepWork: string[]
+  quickWins: string[]
+  followUps: string[]
+  blockers: string[]
+}
+
+export interface TicketDraftResponse {
+  title: string
+  summary: string
+  problem: string
+  scope: string
+  acceptanceCriteria: string[]
+  dependencies: string[]
+  risks: string[]
+  notes: string
 }

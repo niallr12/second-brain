@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, runQuickAction } from './api'
-import type { DashboardResponse, QuickActionRequest, RootNoteItem, RootNoteName } from './types'
+import type { DashboardResponse, QuickActionRequest, RootNoteItem, RootNoteName, TodayLane } from './types'
 
 type ChatPanelKey = 'recentActions' | 'currentTodos' | 'waiting'
 type ChatPanelState = Record<ChatPanelKey, boolean>
@@ -17,6 +17,9 @@ export interface TaskEditorState {
   context: string
   due: string
   followUpOn: string
+  important: boolean
+  lane: TodayLane
+  project: string
   moveTo: RootNoteName
 }
 
@@ -60,6 +63,9 @@ export function useTaskEditor(options: UseTaskEditorOptions) {
       context: item.metadata.context ?? '',
       due: item.metadata.due ?? '',
       followUpOn: item.metadata.followUpOn ?? '',
+      important: item.metadata.important ?? false,
+      lane: item.metadata.lane ?? 'should-do',
+      project: item.metadata.project ?? '',
       moveTo: noteName,
     })
   }
@@ -134,6 +140,9 @@ export function useTaskEditor(options: UseTaskEditorOptions) {
         context: taskEditor.context,
         due: taskEditor.due,
         followUpOn: taskEditor.followUpOn,
+        important: taskEditor.important,
+        lane: taskEditor.moveTo === 'TODAY.md' ? taskEditor.lane : undefined,
+        project: taskEditor.project.trim() || undefined,
         moveTo: taskEditor.moveTo === taskEditor.noteName ? undefined : taskEditor.moveTo,
       },
       taskEditor.moveTo === taskEditor.noteName
@@ -268,6 +277,13 @@ export function getPanelsForAction(action: QuickActionRequest): Partial<ChatPane
     }
 
     return nextState
+  }
+
+  if (action.type === 'promote-today-item-to-project') {
+    return {
+      ...nextState,
+      currentTodos: true,
+    }
   }
 
   if (action.type === 'undo-last-change') {

@@ -22,6 +22,15 @@ const emailAssistSchema = z.object({
   incomingEmail: z.string().optional(),
   outputFormat: z.enum(['short-reply', 'full-reply', 'bullet-summary', 'reply-with-next-actions']).optional(),
 })
+const dayPlanSchema = z.object({
+  focus: z.string().optional(),
+})
+const ticketDraftSchema = z.object({
+  task: z.string().min(2),
+  project: z.string().optional(),
+  notePath: z.string().optional(),
+  extraContext: z.string().optional(),
+})
 const rootNoteNameSchema = z.enum(['TODAY.md', 'WAITING.md', 'INBOX.md'])
 const quickActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('capture-root-item'), target: rootNoteNameSchema, item: z.string().min(1) }),
@@ -40,8 +49,12 @@ const quickActionSchema = z.discriminatedUnion('type', [
     context: z.string().optional(),
     due: z.string().optional(),
     followUpOn: z.string().optional(),
+    important: z.boolean().optional(),
+    lane: z.enum(['critical', 'should-do', 'can-wait']).optional(),
+    project: z.string().optional(),
     moveTo: rootNoteNameSchema.optional(),
   }),
+  z.object({ type: z.literal('promote-today-item-to-project'), item: z.string().min(1), project: z.string().min(1), summary: z.string().optional() }),
   z.object({ type: z.literal('append-project-update'), project: z.string().min(1), update: z.string().min(1), fileName: z.string().optional(), heading: z.string().optional() }),
   z.object({ type: z.literal('add-project-next-step'), project: z.string().min(1), item: z.string().min(1) }),
   z.object({ type: z.literal('undo-last-change') }),
@@ -162,6 +175,23 @@ app.get('/api/notes/read', async (request: Request, response: Response) => {
   } catch (error) {
     response.status(400).json({
       error: error instanceof Error ? error.message : 'Unable to read note.',
+    })
+  }
+})
+
+app.get('/api/notes/context', async (request: Request, response: Response) => {
+  try {
+    const notePath = typeof request.query.path === 'string' ? request.query.path.trim() : ''
+
+    if (!notePath) {
+      response.status(400).json({ error: 'The "path" query parameter is required.' })
+      return
+    }
+
+    response.json(notesService.getNoteContext(notePath))
+  } catch (error) {
+    response.status(400).json({
+      error: error instanceof Error ? error.message : 'Unable to load note context.',
     })
   }
 })
@@ -300,6 +330,50 @@ app.post('/api/email', async (request: Request, response: Response) => {
         error instanceof Error
           ? error.message
           : 'The email helper request failed unexpectedly.',
+    })
+  }
+})
+
+app.post('/api/day-plan', async (request: Request, response: Response) => {
+  if (notesService.getConfig().localOnlyMode) {
+    response.status(409).json({
+      error: 'Local-only mode is enabled. Daily planning is currently disabled.',
+    })
+    return
+  }
+
+  try {
+    const body = dayPlanSchema.parse(request.body)
+    const result = await copilotService.generateDayPlan(body)
+    response.json(result)
+  } catch (error) {
+    response.status(error instanceof z.ZodError ? 400 : 500).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : 'The daily planning request failed unexpectedly.',
+    })
+  }
+})
+
+app.post('/api/ticket-draft', async (request: Request, response: Response) => {
+  if (notesService.getConfig().localOnlyMode) {
+    response.status(409).json({
+      error: 'Local-only mode is enabled. Ticket drafting is currently disabled.',
+    })
+    return
+  }
+
+  try {
+    const body = ticketDraftSchema.parse(request.body)
+    const result = await copilotService.draftTicket(body)
+    response.json(result)
+  } catch (error) {
+    response.status(error instanceof z.ZodError ? 400 : 500).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : 'The ticket drafting request failed unexpectedly.',
     })
   }
 })

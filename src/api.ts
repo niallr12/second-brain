@@ -4,12 +4,15 @@ import type {
   ChatResponse,
   ConfigResponse,
   DashboardResponse,
+  DayPlanResponse,
   EmailAssistResponse,
   HistoryEntry,
+  NoteContextResponse,
   NoteContentResponse,
   QuickActionRequest,
   QuickActionResponse,
   SearchResponse,
+  TicketDraftResponse,
 } from './types'
 
 const ACCESS_KEY_STORAGE_KEY = 'second-brain.access-key'
@@ -162,4 +165,28 @@ export function searchNotes(query: string, limit?: number) {
 export function fetchNoteContent(notePath: string) {
   const params = new URLSearchParams({ path: notePath })
   return request<NoteContentResponse>(`/api/notes/read?${params.toString()}`)
+}
+
+export function fetchNoteContext(notePath: string) {
+  const params = new URLSearchParams({ path: notePath })
+  return request<NoteContextResponse>(`/api/notes/context?${params.toString()}`)
+}
+
+export function generateDayPlan(payload?: { focus?: string }) {
+  return request<DayPlanResponse>('/api/day-plan', {
+    method: 'POST',
+    body: JSON.stringify(payload ?? {}),
+  })
+}
+
+export function draftTicket(payload: {
+  task: string
+  project?: string
+  notePath?: string
+  extraContext?: string
+}) {
+  return request<TicketDraftResponse>('/api/ticket-draft', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }

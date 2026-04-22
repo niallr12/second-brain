@@ -5,11 +5,14 @@ import './App.css'
 import {
   ApiError,
   clearStoredAccessKey,
+  draftTicket,
   fetchAuthStatus,
   fetchConfig,
   fetchDashboard,
+  fetchNoteContext,
   fetchNoteContent,
   fetchWeeklyLog,
+  generateDayPlan,
   improveEmail,
   rebuildIndex,
   runQuickAction,
@@ -26,15 +29,20 @@ import type {
   AuthStatus,
   ConfigResponse,
   DashboardResponse,
+  DayPlanResponse,
   EmailAssistResponse,
+  NoteContextResponse,
+  ProjectSummary,
   QuickActionRequest,
   RootNoteItem,
   RootNoteName,
   RootNoteCard,
   SearchResult,
+  TicketDraftResponse,
+  TodayLane,
 } from './types'
 
-type LoadingState = 'boot' | 'config' | 'action' | 'email' | null
+type LoadingState = 'boot' | 'config' | 'action' | 'email' | 'plan' | 'ticket' | null
 type AppRoute = 'chat' | 'workspace' | 'email' | 'weekly'
 type ChatPanelKey = 'recentActions' | 'currentTodos' | 'waiting'
 type ChatPanelState = Record<ChatPanelKey, boolean>
@@ -43,8 +51,8 @@ type NoteViewerMode = 'rendered' | 'markdown'
 
 const QUICK_WORKFLOWS = [
   {
-    label: 'Prepare day',
-    prompt: 'Prepare my day. Summarize Today, call out anything urgent in Waiting, and suggest the best order to tackle the work.',
+    label: 'Daily plan',
+    prompt: 'Create a daily plan from my Today and Waiting notes. Group it into deep work, quick wins, follow-ups, and blockers.',
   },
   {
     label: 'Waiting by person',
@@ -108,9 +116,21 @@ function App() {
   const [emailResult, setEmailResult] = useState<EmailAssistResponse | null>(null)
   const [openNotePath, setOpenNotePath] = useState<string | null>(null)
   const [openNoteContent, setOpenNoteContent] = useState('')
+  const [openNoteContext, setOpenNoteContext] = useState<NoteContextResponse | null>(null)
   const [openNoteLoading, setOpenNoteLoading] = useState(false)
   const [openNoteError, setOpenNoteError] = useState<string | null>(null)
   const [openNoteMode, setOpenNoteMode] = useState<NoteViewerMode>('rendered')
+  const [focusModeEnabled, setFocusModeEnabled] = useState(false)
+  const [dayPlanFocus, setDayPlanFocus] = useState('')
+  const [dayPlanResult, setDayPlanResult] = useState<DayPlanResponse | null>(null)
+  const [ticketTask, setTicketTask] = useState('')
+  const [ticketProject, setTicketProject] = useState('')
+  const [ticketNotePath, setTicketNotePath] = useState('')
+  const [ticketContext, setTicketContext] = useState('')
+  const [ticketResult, setTicketResult] = useState<TicketDraftResponse | null>(null)
+  const [promoteRowKey, setPromoteRowKey] = useState<string | null>(null)
+  const [promoteProjectName, setPromoteProjectName] = useState('')
+  const [promoteSummary, setPromoteSummary] = useState('')
 
   const handleUnauthorized = useCallback(async (message: string) => {
     clearStoredAccessKey()
@@ -226,7 +246,7 @@ function App() {
     } finally {
       setLoadingState(null)
     }
-  }, [handleUnauthorized])
+  }, [chat, handleUnauthorized])
 
   useEffect(() => {
     void boot()
@@ -437,13 +457,18 @@ function App() {
 
     setOpenNotePath(trimmedPath)
     setOpenNoteContent('')
+    setOpenNoteContext(null)
     setOpenNoteError(null)
     setOpenNoteLoading(true)
 
     try {
-      const response = await fetchNoteContent(trimmedPath)
+      const [response, context] = await Promise.all([
+        fetchNoteContent(trimmedPath),
+        fetchNoteContext(trimmedPath).catch(() => null),
+      ])
       setOpenNotePath(response.path)
       setOpenNoteContent(response.content)
+      setOpenNoteContext(context)
     } catch (caughtError) {
       if (caughtError instanceof ApiError && caughtError.status === 401) {
         await handleUnauthorized('Authentication required. Enter the local access key to continue.')
@@ -458,8 +483,19 @@ function App() {
   function closeOpenNote() {
     setOpenNotePath(null)
     setOpenNoteContent('')
+    setOpenNoteContext(null)
     setOpenNoteError(null)
     setOpenNoteLoading(false)
+  }
+
+  async function handleCopyValue(value: string, successMessage: string) {
+    try {
+      await navigator.clipboard.writeText(value)
+      setActionMessage(successMessage)
+      setError(null)
+    } catch {
+      setError('Unable to copy to the clipboard on this browser.')
+    }
   }
 
   function navigate(nextRoute: AppRoute) {
@@ -601,6 +637,105 @@ function App() {
     } catch {
       setError('Unable to copy the improved email on this browser.')
     }
+  }
+
+  async function handleGenerateDayPlan() {
+    if (config?.localOnlyMode) {
+      setError('Local-only mode is enabled. Disable it in workspace settings to use planning workflows.')
+      return
+    }
+
+    try {
+      setLoadingState('plan')
+      setActionMessage(null)
+      setError(null)
+      const result = await generateDayPlan({
+        focus: dayPlanFocus.trim() || undefined,
+      })
+      setDayPlanResult(result)
+      setActionMessage('Daily plan generated.')
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to generate the daily plan.')
+    } finally {
+      setLoadingState(null)
+    }
+  }
+
+  function prefillTicketDraft(task: RootNoteItem) {
+    setTicketTask(task.text)
+    setTicketProject(task.metadata.project ?? '')
+    setTicketNotePath('')
+    setTicketContext(task.metadata.context ?? '')
+    setTicketResult(null)
+    setActionMessage('Ticket draft form prefilled from task.')
+    navigate('workspace')
+  }
+
+  async function handleDraftTicket(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault()
+
+    if (config?.localOnlyMode) {
+      setError('Local-only mode is enabled. Disable it in workspace settings to draft tickets.')
+      return
+    }
+
+    const task = ticketTask.trim()
+
+    if (!task) {
+      return
+    }
+
+    try {
+      setLoadingState('ticket')
+      setActionMessage(null)
+      setError(null)
+      const result = await draftTicket({
+        task,
+        project: ticketProject.trim() || undefined,
+        notePath: ticketNotePath.trim() || undefined,
+        extraContext: ticketContext.trim() || undefined,
+      })
+      setTicketResult(result)
+      setActionMessage('Ticket draft generated.')
+    } catch (caughtError) {
+      if (caughtError instanceof ApiError && caughtError.status === 401) {
+        await handleUnauthorized('Authentication required. Enter the local access key to continue.')
+        return
+      }
+
+      setError(caughtError instanceof Error ? caughtError.message : 'Unable to draft the ticket.')
+    } finally {
+      setLoadingState(null)
+    }
+  }
+
+  async function handlePromoteTodayItemToProject(item: RootNoteItem, rowKey: string) {
+    const project = promoteProjectName.trim()
+
+    if (!project) {
+      return
+    }
+
+    await tasks.inlineQuickAction(
+      {
+        type: 'promote-today-item-to-project',
+        item: item.text,
+        project,
+        summary: promoteSummary.trim() || undefined,
+      },
+      `Promoted Today item into project ${project}.`,
+      rowKey,
+      'Promoted',
+    )
+
+    setPromoteRowKey(null)
+    setPromoteProjectName('')
+    setPromoteSummary('')
   }
 
   function renderQuickAddForm(panelTarget: 'currentTodos' | 'waiting') {
@@ -750,6 +885,40 @@ function App() {
             />
           </label>
         </div>
+        {editor.moveTo === 'TODAY.md' ? (
+          <>
+            <label className="field">
+              <span>Today lane</span>
+              <select
+                value={editor.lane}
+                onChange={(event) => tasks.updateField('lane', event.target.value as TodayLane)}
+              >
+                <option value="critical">Critical</option>
+                <option value="should-do">Should Do</option>
+                <option value="can-wait">Can Wait</option>
+              </select>
+            </label>
+            <label className="toggle-field compact-toggle-field">
+              <input
+                type="checkbox"
+                checked={editor.important}
+                onChange={(event) => tasks.updateField('important', event.target.checked)}
+              />
+              <div>
+                <span>Mark as important</span>
+                <p>Keep this task pinned near the top of Today.</p>
+              </div>
+            </label>
+          </>
+        ) : null}
+        <label className="field">
+          <span>Linked project</span>
+          <input
+            value={editor.project}
+            onChange={(event) => tasks.updateField('project', event.target.value)}
+            placeholder="Optional project name"
+          />
+        </label>
         <label className="field">
           <span>Move to</span>
           <select
@@ -777,6 +946,175 @@ function App() {
     )
   }
 
+  function renderCurrentTaskRow(item: RootNoteItem, note: RootNoteCard) {
+    const rowKey = getTaskRowKey(note.fileName, item.text)
+    const isPending = tasks.pendingRowKeys.includes(rowKey)
+    const feedback = tasks.rowFeedback[rowKey]
+    const isEditing = tasks.taskEditor?.rowKey === rowKey
+
+    return (
+      <div key={`${note.fileName}-${item.text}`} className="compact-task-row">
+        <div className="task-content">
+          {renderTaskTitle(note.fileName, item)}
+          {renderTaskMetadata(item)}
+        </div>
+        <div className="mini-action-row">
+          <button
+            type="button"
+            className="mini-action-button mini-action-button-secondary"
+            disabled={isPending}
+            onClick={() => tasks.openEditor(note.fileName, item)}
+          >
+            {isEditing ? 'Editing…' : 'Update'}
+          </button>
+          {note.fileName === 'INBOX.md' ? (
+            <button
+              type="button"
+              className="mini-action-button mini-action-button-secondary"
+              disabled={isPending}
+              onClick={() => {
+                void tasks.inlineQuickAction(
+                  {
+                    type: 'promote-inbox-item',
+                    item: item.text,
+                  },
+                  'Promoted inbox item to Today.',
+                  rowKey,
+                  'Moved',
+                )
+              }}
+            >
+              {isPending ? 'Working…' : 'Move to Today'}
+            </button>
+          ) : null}
+          {note.fileName === 'TODAY.md' ? (
+            <button
+              type="button"
+              className="mini-action-button mini-action-button-secondary"
+              disabled={isPending}
+              onClick={() => {
+                void tasks.inlineQuickAction(
+                  {
+                    type: 'update-root-item',
+                    target: 'TODAY.md',
+                    item: item.text,
+                    important: !item.metadata.important,
+                  },
+                  item.metadata.important
+                    ? 'Removed important flag from Today item.'
+                    : 'Marked Today item as important.',
+                  rowKey,
+                  item.metadata.important ? 'Normal' : 'Important',
+                )
+              }}
+            >
+              {isPending ? 'Working…' : item.metadata.important ? 'Normal priority' : 'Mark important'}
+            </button>
+          ) : null}
+          {note.fileName === 'TODAY.md' ? (
+            <button
+              type="button"
+              className="mini-action-button mini-action-button-secondary"
+              disabled={isPending || localOnlyModeEnabled}
+              onClick={() => prefillTicketDraft(item)}
+            >
+              Draft ticket
+            </button>
+          ) : null}
+          {note.fileName === 'TODAY.md' ? (
+            <button
+              type="button"
+              className="mini-action-button mini-action-button-secondary"
+              disabled={isPending}
+              onClick={() => {
+                setPromoteRowKey(rowKey)
+                setPromoteProjectName(item.metadata.project ?? '')
+                setPromoteSummary(item.metadata.context ?? '')
+              }}
+            >
+              Promote to project
+            </button>
+          ) : null}
+          {note.fileName === 'TODAY.md' ? (
+            <button
+              type="button"
+              className="mini-action-button mini-action-button-secondary"
+              disabled={isPending}
+              onClick={() => {
+                void tasks.inlineQuickAction(
+                  {
+                    type: 'defer-today-item',
+                    item: item.text,
+                  },
+                  'Moved Today item to Waiting.',
+                  rowKey,
+                  'Deferred',
+                )
+              }}
+            >
+              {isPending ? 'Working…' : 'Move to Waiting'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="mini-action-button"
+            disabled={isPending}
+            onClick={() => {
+              void tasks.inlineQuickAction(
+                {
+                  type: 'mark-root-item-done',
+                  target: note.fileName,
+                  item: item.text,
+                },
+                `Marked item done in ${note.label}.`,
+                rowKey,
+                'Done',
+              )
+            }}
+          >
+            {isPending ? 'Working…' : 'Done'}
+          </button>
+          {feedback ? <span className="mini-status">{feedback}</span> : null}
+        </div>
+        {promoteRowKey === rowKey ? (
+          <form
+            className="project-promote-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handlePromoteTodayItemToProject(item, rowKey)
+            }}
+          >
+            <input
+              value={promoteProjectName}
+              onChange={(event) => setPromoteProjectName(event.target.value)}
+              placeholder="Project name"
+            />
+            <input
+              value={promoteSummary}
+              onChange={(event) => setPromoteSummary(event.target.value)}
+              placeholder="Optional project summary"
+            />
+            <button type="submit" className="mini-action-button" disabled={isPending || !promoteProjectName.trim()}>
+              Promote
+            </button>
+            <button
+              type="button"
+              className="mini-action-button mini-action-button-secondary"
+              onClick={() => {
+                setPromoteRowKey(null)
+                setPromoteProjectName('')
+                setPromoteSummary('')
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        ) : null}
+        {isEditing ? renderTaskEditorForm() : null}
+      </div>
+    )
+  }
+
   const warnings = config?.health.warnings ?? dashboard?.health.warnings ?? []
   const showInstallButton = installPromptEvent !== null && !isInstalled
   const recentActions = dashboard?.recentActivity.slice(0, 6) ?? []
@@ -789,6 +1127,7 @@ function App() {
   )
   const waitingNote = rootNotes.find((note) => note.fileName === 'WAITING.md')
   const urgentItems = dashboard?.urgentItems ?? []
+  const followUpWaitingItems = urgentItems.filter((item) => item.noteName === 'WAITING.md' && item.followUpDue)
   const localOnlyModeEnabled = config?.localOnlyMode ?? false
 
   if (!authStatus?.authenticated) {
@@ -1173,6 +1512,95 @@ function App() {
                 </button>
               </form>
             </div>
+
+            <div className="panel">
+              <div className="panel-heading">
+                <h2>Assistant Workflows</h2>
+                <span>{loadingState === 'plan' || loadingState === 'ticket' ? 'Working…' : 'Plan and draft'}</span>
+              </div>
+              <div className="stack-form">
+                <label className="field">
+                  <span>Planning focus</span>
+                  <input
+                    value={dayPlanFocus}
+                    onChange={(event) => setDayPlanFocus(event.target.value)}
+                    placeholder="Optional. Example: clear follow-ups before deep work"
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="primary-button compact-button"
+                  disabled={loadingState === 'plan' || localOnlyModeEnabled}
+                  onClick={() => void handleGenerateDayPlan()}
+                >
+                  {loadingState === 'plan' ? 'Generating plan…' : 'Generate daily plan'}
+                </button>
+                {dayPlanResult ? (
+                  <div className="workflow-result">
+                    <p>{dayPlanResult.summary}</p>
+                    {renderWorkflowList('Deep work', dayPlanResult.deepWork)}
+                    {renderWorkflowList('Quick wins', dayPlanResult.quickWins)}
+                    {renderWorkflowList('Follow-ups', dayPlanResult.followUps)}
+                    {renderWorkflowList('Blockers', dayPlanResult.blockers)}
+                  </div>
+                ) : null}
+              </div>
+
+              <form className="stack-form split-form" onSubmit={(event) => { void handleDraftTicket(event) }}>
+                <label className="field">
+                  <span>Ticket task</span>
+                  <input
+                    value={ticketTask}
+                    onChange={(event) => setTicketTask(event.target.value)}
+                    placeholder="Describe the work item"
+                  />
+                </label>
+                <label className="field">
+                  <span>Project</span>
+                  <input
+                    value={ticketProject}
+                    onChange={(event) => setTicketProject(event.target.value)}
+                    placeholder="Optional project name"
+                  />
+                </label>
+                <label className="field">
+                  <span>Related note path</span>
+                  <input
+                    value={ticketNotePath}
+                    onChange={(event) => setTicketNotePath(event.target.value)}
+                    placeholder="Optional. Example: projects/new-alb/status.md"
+                  />
+                </label>
+                <label className="field">
+                  <span>Extra context</span>
+                  <textarea
+                    value={ticketContext}
+                    onChange={(event) => setTicketContext(event.target.value)}
+                    rows={3}
+                    placeholder="Optional architecture or delivery context"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className="primary-button compact-button"
+                  disabled={loadingState === 'ticket' || localOnlyModeEnabled}
+                >
+                  {loadingState === 'ticket' ? 'Drafting ticket…' : 'Draft ticket'}
+                </button>
+                {ticketResult ? (
+                  <div className="workflow-result">
+                    <strong>{ticketResult.title}</strong>
+                    <p>{ticketResult.summary}</p>
+                    <p><strong>Problem:</strong> {ticketResult.problem}</p>
+                    <p><strong>Scope:</strong> {ticketResult.scope}</p>
+                    {renderWorkflowList('Acceptance criteria', ticketResult.acceptanceCriteria)}
+                    {renderWorkflowList('Dependencies', ticketResult.dependencies)}
+                    {renderWorkflowList('Risks', ticketResult.risks)}
+                    <p><strong>Notes:</strong> {ticketResult.notes}</p>
+                  </div>
+                ) : null}
+              </form>
+            </div>
           </aside>
 
           <section className="chat-column">
@@ -1237,9 +1665,10 @@ function App() {
                   <article key={project.name} className="project-card">
                     <header>
                       <h3>{project.name}</h3>
-                      <span>{project.fileCount} files</span>
+                      <span className={`project-health-badge project-health-${project.status}`}>{formatProjectHealth(project.status)}</span>
                     </header>
                     <p>{project.highlights[0] ?? 'No highlights yet.'}</p>
+                    <p className="project-health-copy">{project.healthReason}</p>
                     {project.aliases.length > 0 ? (
                       <footer className="project-aliases">Aliases: {project.aliases.join(', ')}</footer>
                     ) : null}
@@ -1570,14 +1999,22 @@ function App() {
                   {message.role === 'assistant' ? (
                     <div className="message-note-actions">
                       {extractSourcePaths(message.content).map((sourcePath) => (
-                        <button
-                          key={`${message.id}-${sourcePath}`}
-                          type="button"
-                          className="mini-action-button mini-action-button-secondary"
-                          onClick={() => void handleOpenNote(sourcePath)}
-                        >
-                          Open {sourcePath}
-                        </button>
+                        <div key={`${message.id}-${sourcePath}`} className="note-action-group">
+                          <button
+                            type="button"
+                            className="mini-action-button mini-action-button-secondary"
+                            onClick={() => void handleOpenNote(sourcePath)}
+                          >
+                            Open {sourcePath}
+                          </button>
+                          <button
+                            type="button"
+                            className="mini-action-button mini-action-button-secondary"
+                            onClick={() => void handleCopyValue(sourcePath, 'Note path copied.')}
+                          >
+                            Copy path
+                          </button>
+                        </div>
                       ))}
                     </div>
                   ) : null}
@@ -1651,13 +2088,22 @@ function App() {
                   <p>{result.excerpt}</p>
                   <footer>
                     <span>{result.path}</span>
-                    <button
-                      type="button"
-                      className="mini-action-button mini-action-button-secondary"
-                      onClick={() => void handleOpenNote(result.path)}
-                    >
-                      Open note
-                    </button>
+                    <div className="note-action-group">
+                      <button
+                        type="button"
+                        className="mini-action-button mini-action-button-secondary"
+                        onClick={() => void handleOpenNote(result.path)}
+                      >
+                        Open note
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-action-button mini-action-button-secondary"
+                        onClick={() => void handleCopyValue(result.path, 'Note path copied.')}
+                      >
+                        Copy path
+                      </button>
+                    </div>
                     {result.updatedAt ? <span>{formatTime(result.updatedAt)}</span> : null}
                   </footer>
                 </article>
@@ -1732,6 +2178,17 @@ function App() {
               <span className="summary-actions">
                 <button
                   type="button"
+                  className={`panel-chip-button${focusModeEnabled ? ' panel-chip-button-active' : ''}`}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setFocusModeEnabled((current) => !current)
+                  }}
+                >
+                  {focusModeEnabled ? 'Focus on' : 'Focus mode'}
+                </button>
+                <button
+                  type="button"
                   className="panel-add-button"
                   onClick={(event) => {
                     event.preventDefault()
@@ -1750,6 +2207,7 @@ function App() {
             </summary>
             <div className="expandable-body">
               {renderQuickAddForm('currentTodos')}
+              {focusModeEnabled ? <p className="focus-mode-copy">Showing only your top important Today tasks.</p> : null}
               {actionableNotes.length > 0 ? (
                 <div className="compact-note-list">
                   {actionableNotes.map((note) => (
@@ -1760,92 +2218,12 @@ function App() {
                       </header>
                       {note.items.length > 0 ? (
                         <div className="compact-task-list">
-                          {note.items.map((item) => {
-                            const rowKey = getTaskRowKey(note.fileName, item.text)
-                            const isPending = tasks.pendingRowKeys.includes(rowKey)
-                            const feedback = tasks.rowFeedback[rowKey]
-                            const isEditing = tasks.taskEditor?.rowKey === rowKey
-
-                            return (
-                              <div key={`${note.fileName}-${item.text}`} className="compact-task-row">
-                                <div className="task-content">
-                                  {renderTaskTitle(note.fileName, item)}
-                                  {renderTaskMetadata(item)}
-                                </div>
-                                <div className="mini-action-row">
-                                  <button
-                                    type="button"
-                                    className="mini-action-button mini-action-button-secondary"
-                                    disabled={isPending}
-                                    onClick={() => tasks.openEditor(note.fileName, item)}
-                                  >
-                                    {isEditing ? 'Editing…' : 'Update'}
-                                  </button>
-                                  {note.fileName === 'INBOX.md' ? (
-                                    <button
-                                      type="button"
-                                      className="mini-action-button mini-action-button-secondary"
-                                      disabled={isPending}
-                                      onClick={() => {
-                                        void tasks.inlineQuickAction(
-                                          {
-                                            type: 'promote-inbox-item',
-                                            item: item.text,
-                                          },
-                                          'Promoted inbox item to Today.',
-                                          rowKey,
-                                          'Moved',
-                                        )
-                                      }}
-                                    >
-                                      {isPending ? 'Working…' : 'Move to Today'}
-                                    </button>
-                                  ) : null}
-                                  {note.fileName === 'TODAY.md' ? (
-                                    <button
-                                      type="button"
-                                      className="mini-action-button mini-action-button-secondary"
-                                      disabled={isPending}
-                                      onClick={() => {
-                                        void tasks.inlineQuickAction(
-                                          {
-                                            type: 'defer-today-item',
-                                            item: item.text,
-                                          },
-                                          'Moved Today item to Waiting.',
-                                          rowKey,
-                                          'Deferred',
-                                        )
-                                      }}
-                                    >
-                                      {isPending ? 'Working…' : 'Move to Waiting'}
-                                    </button>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    className="mini-action-button"
-                                    disabled={isPending}
-                                    onClick={() => {
-                                      void tasks.inlineQuickAction(
-                                        {
-                                          type: 'mark-root-item-done',
-                                          target: note.fileName,
-                                          item: item.text,
-                                        },
-                                        `Marked item done in ${note.label}.`,
-                                        rowKey,
-                                        'Done',
-                                      )
-                                    }}
-                                  >
-                                    {isPending ? 'Working…' : 'Done'}
-                                  </button>
-                                  {feedback ? <span className="mini-status">{feedback}</span> : null}
-                                </div>
-                                {isEditing ? renderTaskEditorForm() : null}
-                              </div>
-                            )
-                          })}
+                          {note.fileName === 'TODAY.md'
+                            ? getVisibleTodaySections(note, focusModeEnabled).flatMap((section) => ([
+                              <div key={`${note.fileName}-${section.key}`} className="task-section-heading">{section.label}</div>,
+                              ...section.items.map((item) => renderCurrentTaskRow(item, note)),
+                            ]))
+                            : getVisibleInboxItems(note, focusModeEnabled).map((item) => renderCurrentTaskRow(item, note))}
                         </div>
                       ) : (
                         <p>No open items.</p>
@@ -1887,6 +2265,37 @@ function App() {
             </summary>
             <div className="expandable-body">
               {renderQuickAddForm('waiting')}
+              {followUpWaitingItems.length > 0 ? (
+                <div className="followup-banner">
+                  <strong>Waiting follow-ups due now</strong>
+                  <ul className="followup-list">
+                    {followUpWaitingItems.map((item) => (
+                      <li key={`followup-${item.text}`}>
+                        <span>{item.text}</span>
+                        <button
+                          type="button"
+                          className="mini-action-button mini-action-button-secondary"
+                          onClick={() => {
+                            void tasks.inlineQuickAction(
+                              {
+                                type: 'move-root-item',
+                                from: 'WAITING.md',
+                                to: 'TODAY.md',
+                                item: item.text,
+                              },
+                              'Moved follow-up into Today.',
+                              getTaskRowKey('WAITING.md', item.text),
+                              'Moved',
+                            )
+                          }}
+                        >
+                          Pull into Today
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {waitingNote?.items.length ? (
                 <div className="compact-note-list">
                   <article className="compact-entry">
@@ -1923,6 +2332,14 @@ function App() {
                                 onClick={() => prefillFollowUpEmail(item)}
                               >
                                 Draft follow-up
+                              </button>
+                              <button
+                                type="button"
+                                className="mini-action-button mini-action-button-secondary"
+                                disabled={isPending || localOnlyModeEnabled}
+                                onClick={() => prefillTicketDraft(item)}
+                              >
+                                Draft ticket
                               </button>
                               <button
                                 type="button"
@@ -2008,6 +2425,13 @@ function App() {
                 <button
                   type="button"
                   className="secondary-button compact-button"
+                  onClick={() => void handleCopyValue(openNotePath, 'Note path copied.')}
+                >
+                  Copy path
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button compact-button"
                   onClick={closeOpenNote}
                 >
                   Close
@@ -2016,6 +2440,42 @@ function App() {
             </header>
             {openNoteLoading ? <p className="note-viewer-status">Loading note…</p> : null}
             {openNoteError ? <p className="note-viewer-status note-viewer-error">{openNoteError}</p> : null}
+            {!openNoteLoading && !openNoteError && openNoteContext ? (
+              <div className="note-context-panel">
+                <div>
+                  <strong>Related notes</strong>
+                  {openNoteContext.relatedNotes.length > 0 ? (
+                    <ul className="note-context-list">
+                      {openNoteContext.relatedNotes.map((note) => (
+                        <li key={note.path}>
+                          <button type="button" className="note-context-link" onClick={() => void handleOpenNote(note.path)}>
+                            {note.title}
+                          </button>
+                          <span>{note.reason}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="note-viewer-empty">No related notes found.</p>
+                  )}
+                </div>
+                <div>
+                  <strong>Linked tasks</strong>
+                  {openNoteContext.linkedTasks.length > 0 ? (
+                    <ul className="note-context-list">
+                      {openNoteContext.linkedTasks.map((task) => (
+                        <li key={`${task.noteName}-${task.text}`}>
+                          <span>{task.text}</span>
+                          <span>{labelForRootNote(task.noteName)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="note-viewer-empty">No linked tasks found.</p>
+                  )}
+                </div>
+              </div>
+            ) : null}
             {!openNoteLoading && !openNoteError ? (
               openNoteMode === 'markdown' ? (
                 <pre className="note-viewer-content">{openNoteContent || 'This note is empty.'}</pre>
@@ -2059,6 +2519,8 @@ function RootNoteCardView(props: { note: RootNoteCard }) {
 
 function renderTaskMetadata(item: RootNoteItem) {
   const metadataBits = [
+    item.metadata.project ? `Project: ${item.metadata.project}` : null,
+    item.metadata.lane ? `Lane: ${formatTodayLane(item.metadata.lane)}` : null,
     item.metadata.ticket ? `Ticket: ${item.metadata.ticket}` : null,
     item.metadata.person ? `Person: ${item.metadata.person}` : null,
     item.metadata.due ? `Due: ${item.metadata.due}` : null,
@@ -2076,9 +2538,19 @@ function renderTaskMetadata(item: RootNoteItem) {
 
 function renderTaskTitle(noteName: RootNoteName, item: RootNoteItem) {
   const showStaleWarning = noteName === 'TODAY.md' && isTodayItemStale(item)
+  const showImportantMarker = noteName === 'TODAY.md' && item.metadata.important
 
   return (
     <span className="task-title-row">
+      {showImportantMarker ? (
+        <span
+          className="important-task-indicator"
+          title="Important task"
+          aria-label="Important task"
+        >
+          !
+        </span>
+      ) : null}
       <span>{item.text}</span>
       {showStaleWarning ? (
         <span
@@ -2090,6 +2562,23 @@ function renderTaskTitle(noteName: RootNoteName, item: RootNoteItem) {
         </span>
       ) : null}
     </span>
+  )
+}
+
+function renderWorkflowList(label: string, items: string[]) {
+  if (items.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="workflow-list-block">
+      <strong>{label}</strong>
+      <ul>
+        {items.map((item) => (
+          <li key={`${label}-${item}`}>{item}</li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -2134,6 +2623,73 @@ function isTodayItemStale(item: RootNoteItem) {
   const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
   const ageInDays = Math.floor((todayUtc - addedOnDate) / 86_400_000)
   return ageInDays > 3
+}
+
+function getSortedRootNoteItems(note: RootNoteCard) {
+  if (note.fileName !== 'TODAY.md') {
+    return note.items
+  }
+
+  return [...note.items].sort((left, right) => Number(right.metadata.important === true) - Number(left.metadata.important === true))
+}
+
+function getVisibleInboxItems(note: RootNoteCard, focusModeEnabled: boolean) {
+  if (!focusModeEnabled || note.fileName !== 'INBOX.md') {
+    return note.items
+  }
+
+  return []
+}
+
+function getVisibleTodaySections(note: RootNoteCard, focusModeEnabled: boolean) {
+  const items = focusModeEnabled
+    ? getFocusItems(note.items)
+    : getSortedRootNoteItems(note)
+
+  const sections = [
+    { key: 'critical', label: 'Critical', items: items.filter((item) => getTodaySectionKey(item) === 'critical') },
+    { key: 'should-do', label: 'Should Do', items: items.filter((item) => getTodaySectionKey(item) === 'should-do') },
+    { key: 'can-wait', label: 'Can Wait', items: items.filter((item) => getTodaySectionKey(item) === 'can-wait') },
+  ]
+
+  return sections.filter((section) => section.items.length > 0)
+}
+
+function getFocusItems(items: RootNoteItem[]) {
+  return getSortedRootNoteItems({
+    fileName: 'TODAY.md',
+    label: 'Today',
+    path: 'TODAY.md',
+    preview: '',
+    lineCount: 0,
+    taskCount: items.length,
+    items,
+    updatedAt: null,
+  }).filter((item) => item.metadata.important || getTodaySectionKey(item) === 'critical').slice(0, 3)
+}
+
+function getTodaySectionKey(item: RootNoteItem): TodayLane {
+  if (item.metadata.important || item.metadata.lane === 'critical') {
+    return 'critical'
+  }
+
+  if (item.metadata.lane === 'can-wait') {
+    return 'can-wait'
+  }
+
+  return 'should-do'
+}
+
+function formatTodayLane(value: TodayLane) {
+  if (value === 'critical') return 'Critical'
+  if (value === 'can-wait') return 'Can Wait'
+  return 'Should Do'
+}
+
+function formatProjectHealth(value: ProjectSummary['status']) {
+  if (value === 'active') return 'Active'
+  if (value === 'at-risk') return 'At risk'
+  return 'Stalled'
 }
 
 function parseDateOnlyAsUtc(value: string) {

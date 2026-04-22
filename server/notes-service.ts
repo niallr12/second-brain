@@ -60,6 +60,9 @@ interface RootNoteMetadata {
   due?: string
   followUpOn?: string
   addedOn?: string
+  important?: boolean
+  lane?: 'critical' | 'should-do' | 'can-wait'
+  project?: string
 }
 
 interface RootNoteItem {
@@ -85,6 +88,10 @@ interface ProjectSummary {
   lastUpdated: string | null
   highlights: string[]
   aliases: string[]
+  status: 'active' | 'at-risk' | 'stalled'
+  healthReason: string
+  openNextSteps: number
+  linkedWaitingCount: number
 }
 
 interface WorkspaceHealth {
@@ -101,7 +108,8 @@ export type QuickActionRequest =
   | { type: 'promote-inbox-item'; item: string }
   | { type: 'defer-today-item'; item: string }
   | { type: 'mark-root-item-done'; target: RootNoteName; item: string }
-  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; due?: string; followUpOn?: string; moveTo?: RootNoteName }
+  | { type: 'update-root-item'; target: RootNoteName; item: string; nextItem?: string; ticket?: string; link?: string; person?: string; context?: string; due?: string; followUpOn?: string; important?: boolean; lane?: 'critical' | 'should-do' | 'can-wait'; project?: string; moveTo?: RootNoteName }
+  | { type: 'promote-today-item-to-project'; item: string; project: string; summary?: string }
   | { type: 'append-project-update'; project: string; update: string; fileName?: string; heading?: string }
   | { type: 'add-project-next-step'; project: string; item: string }
   | { type: 'undo-last-change' }
@@ -297,6 +305,24 @@ export class NotesService {
         title: document.title,
         updatedAt: document.updatedAt,
       }))
+  }
+
+  getNoteContext(relativePath: string) {
+    const normalizedPath = relativePath.trim().replace(/^\/+/, '')
+    const document = this.documents.find((entry) => entry.relativePath === normalizedPath)
+
+    if (!document) {
+      throw new Error(`Could not find note "${relativePath}".`)
+    }
+
+    const relatedNotes = this.getRelatedNotes(document)
+    const linkedTasks = this.getLinkedTasksForDocument(document)
+
+    return {
+      path: document.relativePath,
+      relatedNotes,
+      linkedTasks,
+    }
   }
 
   async undoLastChange() {
@@ -613,6 +639,9 @@ export class NotesService {
       context?: string
       due?: string
       followUpOn?: string
+      important?: boolean
+      lane?: 'critical' | 'should-do' | 'can-wait'
+      project?: string
       moveTo?: RootNoteName
     },
   ) {
@@ -637,6 +666,9 @@ export class NotesService {
         ...(patch.context !== undefined ? { context: patch.context } : {}),
         ...(patch.due !== undefined ? { due: patch.due } : {}),
         ...(patch.followUpOn !== undefined ? { followUpOn: patch.followUpOn } : {}),
+        ...(patch.important !== undefined ? { important: patch.important } : {}),
+        ...(patch.lane !== undefined ? { lane: patch.lane } : {}),
+        ...(patch.project !== undefined ? { project: patch.project } : {}),
         addedOn: sourceBlock.item.metadata.addedOn,
       }),
     }
@@ -762,6 +794,52 @@ export class NotesService {
     return this.moveRootItem('TODAY.md', 'WAITING.md', item)
   }
 
+  async promoteTodayItemToProject(item: string, project: string, summary?: string) {
+    const safeProject = this.resolveProjectName(project)
+    const todayPath = this.resolveNotePath('TODAY.md')
+    const todayLines = await readNoteLines(todayPath)
+    const todayBlocks = parseRootNoteBlocks(todayLines)
+    const todayIndex = findRootItemBlockIndex(todayBlocks, item)
+
+    if (todayIndex === -1) {
+      throw new Error(`Could not find "${item}" in TODAY.md`)
+    }
+
+    const sourceBlock = todayBlocks[todayIndex]
+    const itemText = sourceBlock.item.text
+    const projectExists = this.documents.some((document) => document.project === safeProject)
+
+    if (!projectExists) {
+      await this.createProject(safeProject, {
+        summary: summary?.trim() || `Project created from Today task: ${itemText}`,
+        nextSteps: [itemText],
+      })
+    } else {
+      await this.addProjectNextStep(safeProject, itemText)
+    }
+
+    const existingContext = sourceBlock.item.metadata.context?.trim()
+    const linkedContext = `Tracked in project ${safeProject}.`
+    const nextContext = existingContext
+      ? existingContext.includes(linkedContext)
+        ? existingContext
+        : `${existingContext} ${linkedContext}`.trim()
+      : linkedContext
+
+    await this.updateRootItem('TODAY.md', itemText, {
+      project: safeProject,
+      context: nextContext,
+      lane: sourceBlock.item.metadata.lane ?? 'critical',
+      important: sourceBlock.item.metadata.important ?? true,
+    })
+
+    return {
+      item: itemText,
+      project: safeProject,
+      status: 'promoted',
+    }
+  }
+
   async createProject(project: string, options?: { summary?: string; nextSteps?: string[] }) {
     const safeProject = slugify(project)
 
@@ -845,8 +923,13 @@ export class NotesService {
           context: action.context,
           due: action.due,
           followUpOn: action.followUpOn,
+          important: action.important,
+          lane: action.lane,
+          project: action.project,
           moveTo: action.moveTo,
         })
+      case 'promote-today-item-to-project':
+        return this.promoteTodayItemToProject(action.item, action.project, action.summary)
       case 'append-project-update':
         return this.appendProjectUpdate(
           action.project,
@@ -1131,6 +1214,7 @@ export class NotesService {
 
   private getProjectSummaries(): ProjectSummary[] {
     const projectMap = new Map<string, NoteDocument[]>()
+    const waitingItems = this.getRootNoteCard('WAITING.md').items
 
     for (const document of this.documents) {
       if (!document.project) {
@@ -1146,20 +1230,88 @@ export class NotesService {
       .map(([projectName, documents]) => {
         const aliases = [...new Set(documents.flatMap((document) => document.aliases))]
           .sort((left, right) => left.localeCompare(right))
+        const lastUpdated = documents
+          .map((document) => document.updatedAt)
+          .sort((left, right) => right.localeCompare(left))[0] ?? null
+        const openNextSteps = documents.reduce((count, document) => {
+          if (!document.relativePath.toLowerCase().endsWith('/next-steps.md')) {
+            return count
+          }
+
+          return count + countOpenChecklistItems(document.content)
+        }, 0)
+        const linkedWaitingCount = waitingItems.filter((item) =>
+          item.metadata.project === projectName,
+        ).length
+        const health = getProjectHealth({
+          lastUpdated,
+          openNextSteps,
+          linkedWaitingCount,
+        })
 
         return {
           name: projectName,
           fileCount: documents.length,
-          lastUpdated: documents
-            .map((document) => document.updatedAt)
-            .sort((left, right) => right.localeCompare(left))[0] ?? null,
+          lastUpdated,
           highlights: documents
             .slice(0, 3)
             .map((document) => `${document.title}: ${document.excerpt}`),
           aliases,
+          status: health.status,
+          healthReason: health.reason,
+          openNextSteps,
+          linkedWaitingCount,
         }
       })
       .sort((left, right) => (right.lastUpdated ?? '').localeCompare(left.lastUpdated ?? ''))
+  }
+
+  private getRelatedNotes(document: NoteDocument) {
+    const sameProjectNotes = document.project
+      ? this.documents
+        .filter((entry) => entry.relativePath !== document.relativePath && entry.project === document.project)
+        .map((entry) => ({
+          path: entry.relativePath,
+          title: entry.title,
+          updatedAt: entry.updatedAt,
+          reason: `Same project: ${document.project}`,
+        }))
+      : []
+
+    if (sameProjectNotes.length > 0) {
+      return sameProjectNotes.slice(0, 5)
+    }
+
+    const parentFolder = getParentFolder(document.relativePath)
+    return this.documents
+      .filter((entry) => entry.relativePath !== document.relativePath && getParentFolder(entry.relativePath) === parentFolder)
+      .map((entry) => ({
+        path: entry.relativePath,
+        title: entry.title,
+        updatedAt: entry.updatedAt,
+        reason: 'Same folder',
+      }))
+      .slice(0, 5)
+  }
+
+  private getLinkedTasksForDocument(document: NoteDocument) {
+    const projectAliases = document.project
+      ? [...(this.getProjectAliasMap().get(document.project) ?? new Set<string>())]
+      : []
+
+    return ROOT_NOTE_NAMES
+      .flatMap((fileName) => this.getRootNoteCard(fileName).items.map((item) => ({
+        item,
+        noteName: fileName,
+      })))
+      .filter(({ item }) => rootTaskMatchesDocument(item, document, projectAliases))
+      .slice(0, 6)
+      .map(({ item, noteName }) => ({
+        text: item.text,
+        noteName,
+        important: item.metadata.important === true,
+        ...(item.metadata.project ? { project: item.metadata.project } : {}),
+      }))
   }
 
   private getWorkspaceHealth(): WorkspaceHealth {
@@ -1855,7 +2007,38 @@ function parseRootNoteBlocks(lines: string[]) {
         const metadataEntry = parseRootNoteMetadataLine(nextLine)
 
         if (metadataEntry) {
-          metadata[metadataEntry.key] = metadataEntry.value
+          switch (metadataEntry.key) {
+            case 'important':
+              metadata.important = metadataEntry.value
+              break
+            case 'lane':
+              metadata.lane = normalizeTodayLane(metadataEntry.value)
+              break
+            case 'ticket':
+              metadata.ticket = metadataEntry.value
+              break
+            case 'link':
+              metadata.link = metadataEntry.value
+              break
+            case 'person':
+              metadata.person = metadataEntry.value
+              break
+            case 'context':
+              metadata.context = metadataEntry.value
+              break
+            case 'due':
+              metadata.due = metadataEntry.value
+              break
+            case 'followUpOn':
+              metadata.followUpOn = metadataEntry.value
+              break
+            case 'addedOn':
+              metadata.addedOn = metadataEntry.value
+              break
+            case 'project':
+              metadata.project = metadataEntry.value
+              break
+          }
         }
 
         end += 1
@@ -1891,14 +2074,21 @@ function isRootNoteItemLine(line: string) {
 }
 
 function isRootNoteMetadataLine(line: string) {
-  return /^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up|added):\s+.+$/i.test(line)
+  return /^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up|added|important|lane|project):\s+.+$/i.test(line)
 }
 
 function parseRootNoteMetadataLine(line: string) {
-  const match = line.match(/^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up|added):\s+(.+)$/i)
+  const match = line.match(/^\s{2,}[-*]\s+(ticket|link|person|context|due|follow-up|added|important|lane|project):\s+(.+)$/i)
 
   if (!match) {
     return null
+  }
+
+  if (match[1].toLowerCase() === 'important') {
+    return {
+      key: 'important' as const,
+      value: isTruthyRootMetadataValue(match[2]),
+    }
   }
 
   return {
@@ -1907,8 +2097,12 @@ function parseRootNoteMetadataLine(line: string) {
         ? 'followUpOn'
         : match[1].toLowerCase() === 'added'
           ? 'addedOn'
+          : match[1].toLowerCase() === 'lane'
+            ? 'lane'
+            : match[1].toLowerCase() === 'project'
+              ? 'project'
           : match[1].toLowerCase()
-    ) as keyof RootNoteMetadata,
+    ) as Exclude<keyof RootNoteMetadata, 'important'>,
     value: match[2].trim(),
   }
 }
@@ -1921,6 +2115,9 @@ function normalizeRootNoteMetadata(metadata: RootNoteMetadata): RootNoteMetadata
   const normalizedDue = normalizeRootNoteMetadataValue(metadata.due)
   const normalizedFollowUpOn = normalizeRootNoteMetadataValue(metadata.followUpOn)
   const normalizedAddedOn = normalizeRootNoteMetadataValue(metadata.addedOn)
+  const normalizedImportant = metadata.important === true
+  const normalizedLane = normalizeTodayLane(metadata.lane)
+  const normalizedProject = normalizeRootNoteMetadataValue(metadata.project)
 
   return {
     ...(normalizedTicket ? { ticket: normalizedTicket } : {}),
@@ -1930,6 +2127,9 @@ function normalizeRootNoteMetadata(metadata: RootNoteMetadata): RootNoteMetadata
     ...(normalizedDue ? { due: normalizedDue } : {}),
     ...(normalizedFollowUpOn ? { followUpOn: normalizedFollowUpOn } : {}),
     ...(normalizedAddedOn ? { addedOn: normalizedAddedOn } : {}),
+    ...(normalizedImportant ? { important: true } : {}),
+    ...(normalizedLane ? { lane: normalizedLane } : {}),
+    ...(normalizedProject ? { project: normalizedProject } : {}),
   }
 }
 
@@ -1941,6 +2141,9 @@ function rootNoteMetadataEntries(metadata: RootNoteMetadata) {
     ['due', metadata.due],
     ['follow-up', metadata.followUpOn],
     ['added', metadata.addedOn],
+    ['important', metadata.important ? 'yes' : undefined],
+    ['lane', metadata.lane],
+    ['project', metadata.project],
     ['context', metadata.context],
   ] as const)
     .flatMap((key) => {
@@ -1950,6 +2153,22 @@ function rootNoteMetadataEntries(metadata: RootNoteMetadata) {
 
 function normalizeRootNoteMetadataValue(value?: string) {
   return value?.replace(/\s+/g, ' ').trim() ?? ''
+}
+
+function normalizeTodayLane(value?: string): RootNoteMetadata['lane'] {
+  if (value === 'critical' || value === 'should-do' || value === 'can-wait') {
+    return value
+  }
+
+  return undefined
+}
+
+function isTruthyRootMetadataValue(value: unknown) {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  return ['1', 'true', 'yes', 'y', 'important'].includes(value.trim().toLowerCase())
 }
 
 function buildRootNoteMetadataForDestination(
@@ -1964,6 +2183,8 @@ function buildRootNoteMetadataForDestination(
         ? getCurrentDateStamp()
         : metadata.addedOn
       : undefined,
+    important: noteName === 'TODAY.md' ? metadata.important === true : false,
+    lane: noteName === 'TODAY.md' ? metadata.lane : undefined,
   })
 }
 
@@ -1972,6 +2193,76 @@ function sanitizeProjectFileName(fileName: string) {
   const segments = trimmed.split('/').filter(Boolean)
   const leaf = segments.at(-1) ?? 'status.md'
   return leaf.endsWith('.md') ? leaf : `${leaf}.md`
+}
+
+function countOpenChecklistItems(content: string) {
+  return content
+    .split('\n')
+    .filter((line) => /^\s*[-*]\s+\[\s\]\s+/.test(line))
+    .length
+}
+
+function getParentFolder(relativePath: string) {
+  const segments = relativePath.split('/').slice(0, -1)
+  return segments.join('/')
+}
+
+function rootTaskMatchesDocument(
+  item: RootNoteItem,
+  document: NoteDocument,
+  projectAliases: string[],
+) {
+  if (document.project && item.metadata.project === document.project) {
+    return true
+  }
+
+  const normalizedHaystack = `${item.text} ${item.metadata.context ?? ''} ${item.metadata.project ?? ''}`.toLowerCase()
+  const titleTokens = tokenize(document.title).filter((token) => token.length >= 4)
+  const pathTokens = tokenize(document.relativePath).filter((token) => token.length >= 4)
+  const aliasTokens = projectAliases.map((alias) => slugify(alias).replace(/-/g, ' ')).filter((alias) => alias.length >= 4)
+
+  return [...titleTokens, ...pathTokens, ...aliasTokens].some((token) => normalizedHaystack.includes(token))
+}
+
+function getProjectHealth(input: {
+  lastUpdated: string | null
+  openNextSteps: number
+  linkedWaitingCount: number
+}) {
+  const daysSinceUpdate = input.lastUpdated ? getDaysSince(input.lastUpdated) : Number.POSITIVE_INFINITY
+
+  if (input.linkedWaitingCount >= 2 || daysSinceUpdate >= 21 || (input.openNextSteps === 0 && daysSinceUpdate >= 14)) {
+    return {
+      status: 'stalled' as const,
+      reason: input.linkedWaitingCount >= 2
+        ? `${input.linkedWaitingCount} waiting items are blocking progress`
+        : input.openNextSteps === 0
+          ? 'No open next steps and no recent updates'
+          : 'No recent project updates',
+    }
+  }
+
+  if (input.linkedWaitingCount >= 1 || daysSinceUpdate >= 10 || input.openNextSteps === 0) {
+    return {
+      status: 'at-risk' as const,
+      reason: input.linkedWaitingCount >= 1
+        ? 'Waiting on follow-ups'
+        : input.openNextSteps === 0
+          ? 'No open next steps recorded'
+          : 'Update cadence is slipping',
+    }
+  }
+
+  return {
+    status: 'active' as const,
+    reason: input.openNextSteps > 0 ? `${input.openNextSteps} open next step${input.openNextSteps === 1 ? '' : 's'}` : 'Moving forward',
+  }
+}
+
+function getDaysSince(value: string) {
+  const now = Date.now()
+  const then = new Date(value).getTime()
+  return Math.floor((now - then) / 86_400_000)
 }
 
 function createProjectNoteTemplate(project: string, fileName: string) {

@@ -15,6 +15,17 @@ interface EmailAssistRequest {
   outputFormat?: 'short-reply' | 'full-reply' | 'bullet-summary' | 'reply-with-next-actions'
 }
 
+interface DayPlanRequest {
+  focus?: string
+}
+
+interface TicketDraftRequest {
+  task: string
+  project?: string
+  notePath?: string
+  extraContext?: string
+}
+
 interface ToolCallLog {
   name: string
   status: 'started' | 'completed'
@@ -163,6 +174,104 @@ You are an email editor for a solution architect.
     }
   }
 
+  async generateDayPlan(request: DayPlanRequest) {
+    const client = await this.getClient()
+    const config = this.notes.getConfig()
+    const overview = this.notes.getOverviewForAssistant()
+    const session = await client.createSession({
+      model: config.model,
+      workingDirectory: config.notesPath,
+      tools: [],
+      availableTools: [],
+      onPermissionRequest: restrictPermissions,
+      systemMessage: {
+        content: `
+<assistant_role>
+You are a daily planning assistant for a solution architect.
+</assistant_role>
+
+<operating_rules>
+- Build a realistic plan for today from the supplied notes overview.
+- Prioritise deep work, urgent follow-ups, and unblockers.
+- Keep the advice concrete and ordered.
+- Return the response using exactly these tags:
+<summary>short overview paragraph</summary>
+<deep_work>bullet list</deep_work>
+<quick_wins>bullet list</quick_wins>
+<follow_ups>bullet list</follow_ups>
+<blockers>bullet list</blockers>
+</operating_rules>
+`,
+      },
+    })
+
+    try {
+      const response = await session.sendAndWait({
+        prompt: [
+          request.focus?.trim() ? `Focus for today: ${request.focus.trim()}` : 'Focus for today: (none supplied)',
+          'Notes overview:',
+          JSON.stringify(overview, null, 2),
+        ].join('\n\n'),
+      }, 120_000)
+
+      return parseDayPlanResponse(response?.data.content ?? '')
+    } finally {
+      await session.disconnect().catch(() => undefined)
+    }
+  }
+
+  async draftTicket(request: TicketDraftRequest) {
+    const client = await this.getClient()
+    const config = this.notes.getConfig()
+    const note = request.notePath?.trim()
+      ? await this.notes.readNote(request.notePath.trim()).catch(() => null)
+      : null
+    const session = await client.createSession({
+      model: config.model,
+      workingDirectory: config.notesPath,
+      tools: [],
+      availableTools: [],
+      onPermissionRequest: restrictPermissions,
+      systemMessage: {
+        content: `
+<assistant_role>
+You are a ticket drafting assistant for a solution architect.
+</assistant_role>
+
+<operating_rules>
+- Draft a crisp dev-ready work item from the supplied task and context.
+- Make the result implementation-oriented but not verbose.
+- Prefer concrete acceptance criteria and explicit scope boundaries.
+- Return the response using exactly these tags:
+<title>single-line ticket title</title>
+<summary>2-4 sentence summary</summary>
+<problem>problem statement</problem>
+<scope>what is in scope and out of scope</scope>
+<acceptance_criteria>bullet list</acceptance_criteria>
+<dependencies>bullet list</dependencies>
+<risks>bullet list</risks>
+<notes>short drafting note</notes>
+</operating_rules>
+`,
+      },
+    })
+
+    try {
+      const response = await session.sendAndWait({
+        prompt: [
+          `Task: ${request.task.trim()}`,
+          request.project?.trim() ? `Project: ${request.project.trim()}` : 'Project: (none supplied)',
+          request.extraContext?.trim() ? `Extra context: ${request.extraContext.trim()}` : 'Extra context: (none supplied)',
+          note ? `Related note (${note.path}):\n${note.content}` : 'Related note: (none supplied)',
+        ].join('\n\n'),
+      }, 120_000)
+
+      return parseTicketDraftResponse(response?.data.content ?? '', request)
+    } finally {
+      await session.disconnect().catch(() => undefined)
+    }
+  }
+
   private async getSession(sessionId?: string) {
     if (sessionId) {
       const cached = this.sessions.get(sessionId)
@@ -193,8 +302,9 @@ You are a notes operator for a solution architect's local PARA-style workspace.
 - Use \`search_notes\` before answering project, process, or research questions. It returns chunk-level citations.
 - Prefer the structured root-note tools for task capture, moving items between lists, and marking things done.
 - Prefer \`update_root_item\` when you need to add lightweight task metadata such as ticket IDs, links, people, or short context notes, or when updating a task before moving it.
-- \`update_root_item\` also supports optional due dates and follow-up dates for lightweight task tracking.
+- \`update_root_item\` also supports optional due dates, follow-up dates, Today lanes, important flags, and linked project metadata for lightweight task tracking.
 - Prefer \`promote_inbox_item\` and \`defer_today_item\` for common list triage.
+- Use \`promote_today_item_to_project\` when a Today task has become a real project or should be tracked under an existing project.
 - Use \`create_project\` when the user asks to start a new project or scaffold a new project workspace.
 - Prefer \`append_project_update\` and \`add_project_next_step\` for small project updates instead of rewriting full files.
 - Use \`write_area_note\` or \`append_area_note\` when the user asks to create or update notes under Areas. Areas are for ongoing reference material, how-to guides, and process documentation.
@@ -303,10 +413,13 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           context: z.string().optional().describe('Optional short context note, such as waiting on an email reply'),
           due: z.string().optional().describe('Optional due date, for example 2026-03-20'),
           followUpOn: z.string().optional().describe('Optional follow-up date, for example 2026-03-22'),
+          important: z.boolean().optional().describe('Optional flag to pin a Today task to the top of the list'),
+          lane: z.enum(['critical', 'should-do', 'can-wait']).optional().describe('Optional Today lane'),
+          project: z.string().optional().describe('Optional linked project name'),
           moveTo: rootNoteSchema.optional().describe('Optional destination root note'),
         }),
-        handler: async ({ target, item, nextItem, ticket, link, person, context, due, followUpOn, moveTo }) =>
-          this.notes.updateRootItem(target, item, { nextItem, ticket, link, person, context, due, followUpOn, moveTo }),
+        handler: async ({ target, item, nextItem, ticket, link, person, context, due, followUpOn, important, lane, project, moveTo }) =>
+          this.notes.updateRootItem(target, item, { nextItem, ticket, link, person, context, due, followUpOn, important, lane, project, moveTo }),
       }),
       defineTool('promote_inbox_item', {
         description: 'Move an item from INBOX.md to TODAY.md.',
@@ -321,6 +434,15 @@ You are a notes operator for a solution architect's local PARA-style workspace.
           item: z.string().min(2).describe('Task text to defer'),
         }),
         handler: async ({ item }) => this.notes.deferTodayItemToWaiting(item),
+      }),
+      defineTool('promote_today_item_to_project', {
+        description: 'Create or link a project from a Today task, add the task as a project next step, and leave a trace on Today.',
+        parameters: z.object({
+          item: z.string().min(2).describe('Today task text to promote'),
+          project: z.string().min(2).describe('Project name'),
+          summary: z.string().optional().describe('Optional project summary when creating a new project'),
+        }),
+        handler: async ({ item, project, summary }) => this.notes.promoteTodayItemToProject(item, project, summary),
       }),
       defineTool('create_project', {
         description: 'Create a new project folder with starter project notes.',
@@ -435,6 +557,36 @@ function parseEmailAssistResponse(content: string, request: EmailAssistRequest) 
     notes,
     ...(nextActions.length > 0 ? { nextActions } : {}),
   }
+}
+
+function parseDayPlanResponse(content: string) {
+  return {
+    summary: extractTaggedSection(content, 'summary') || 'No planning summary was returned.',
+    deepWork: extractBulletList(content, 'deep_work'),
+    quickWins: extractBulletList(content, 'quick_wins'),
+    followUps: extractBulletList(content, 'follow_ups'),
+    blockers: extractBulletList(content, 'blockers'),
+  }
+}
+
+function parseTicketDraftResponse(content: string, request: TicketDraftRequest) {
+  return {
+    title: extractTaggedSection(content, 'title') || request.task.trim(),
+    summary: extractTaggedSection(content, 'summary') || 'No ticket summary was returned.',
+    problem: extractTaggedSection(content, 'problem') || request.task.trim(),
+    scope: extractTaggedSection(content, 'scope') || 'Clarify implementation scope before development starts.',
+    acceptanceCriteria: extractBulletList(content, 'acceptance_criteria'),
+    dependencies: extractBulletList(content, 'dependencies'),
+    risks: extractBulletList(content, 'risks'),
+    notes: extractTaggedSection(content, 'notes') || 'Draft generated from the supplied task and note context.',
+  }
+}
+
+function extractBulletList(content: string, tagName: string) {
+  return extractTaggedSection(content, tagName)
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-*]\s*/, '').trim())
+    .filter((line) => line.length > 0)
 }
 
 function extractTaggedSection(content: string, tagName: string) {
