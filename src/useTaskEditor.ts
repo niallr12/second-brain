@@ -101,15 +101,17 @@ export function useTaskEditor(options: UseTaskEditorOptions) {
         ...getPanelsForAction(action),
       }))
       queueRowFeedback(rowKey, feedbackLabel)
+      return true
     } catch (caughtError) {
       if (caughtError instanceof ApiError && caughtError.status === 401) {
         await onUnauthorized('Authentication required. Enter the local access key to continue.')
-        return
+        return false
       }
 
       setError(
         caughtError instanceof Error ? caughtError.message : 'The requested action failed.',
       )
+      return false
     } finally {
       setPendingRowKeys((current) => current.filter((value) => value !== rowKey))
     }

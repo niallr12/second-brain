@@ -131,6 +131,8 @@ function App() {
   const [promoteRowKey, setPromoteRowKey] = useState<string | null>(null)
   const [promoteProjectName, setPromoteProjectName] = useState('')
   const [promoteSummary, setPromoteSummary] = useState('')
+  const [openActionMenuRow, setOpenActionMenuRow] = useState<string | null>(null)
+  const [dismissedRowKeys, setDismissedRowKeys] = useState<string[]>([])
 
   const handleUnauthorized = useCallback(async (message: string) => {
     clearStoredAccessKey()
@@ -211,6 +213,11 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(CHAT_PANEL_STORAGE_KEY, JSON.stringify(chatPanels))
   }, [chatPanels])
+
+  useEffect(() => {
+    setDismissedRowKeys([])
+    setOpenActionMenuRow(null)
+  }, [dashboard])
 
   const boot = useCallback(async () => {
     try {
@@ -738,6 +745,37 @@ function App() {
     setPromoteSummary('')
   }
 
+  function isRowDismissed(noteName: RootNoteName, itemText: string) {
+    return dismissedRowKeys.includes(getTaskRowKey(noteName, itemText))
+  }
+
+  function dismissRow(rowKey: string) {
+    setDismissedRowKeys((current) => (current.includes(rowKey) ? current : [...current, rowKey]))
+  }
+
+  async function runInlineRowAction(
+    action: QuickActionRequest,
+    successMessage: string,
+    rowKey: string,
+    feedbackLabel: string,
+    options?: {
+      dismissOnSuccess?: boolean
+      closeMenu?: boolean
+    },
+  ) {
+    const success = await tasks.inlineQuickAction(action, successMessage, rowKey, feedbackLabel)
+
+    if (success && options?.dismissOnSuccess) {
+      dismissRow(rowKey)
+    }
+
+    if (options?.closeMenu) {
+      setOpenActionMenuRow(null)
+    }
+
+    return success
+  }
+
   function renderQuickAddForm(panelTarget: 'currentTodos' | 'waiting') {
     const isCurrentPanel = panelTarget === 'currentTodos'
       ? quickAdd.target === 'TODAY.md' || quickAdd.target === 'INBOX.md'
@@ -948,9 +986,15 @@ function App() {
 
   function renderCurrentTaskRow(item: RootNoteItem, note: RootNoteCard) {
     const rowKey = getTaskRowKey(note.fileName, item.text)
+
+    if (isRowDismissed(note.fileName, item.text)) {
+      return null
+    }
+
     const isPending = tasks.pendingRowKeys.includes(rowKey)
     const feedback = tasks.rowFeedback[rowKey]
     const isEditing = tasks.taskEditor?.rowKey === rowKey
+    const isMenuOpen = openActionMenuRow === rowKey
 
     return (
       <div key={`${note.fileName}-${item.text}`} className="compact-task-row">
@@ -958,123 +1002,213 @@ function App() {
           {renderTaskTitle(note.fileName, item)}
           {renderTaskMetadata(item)}
         </div>
-        <div className="mini-action-row">
-          <button
-            type="button"
-            className="mini-action-button mini-action-button-secondary"
-            disabled={isPending}
-            onClick={() => tasks.openEditor(note.fileName, item)}
-          >
-            {isEditing ? 'Editing…' : 'Update'}
-          </button>
-          {note.fileName === 'INBOX.md' ? (
+        <div className="task-row-actions">
+          <div className="mini-action-row">
             <button
               type="button"
               className="mini-action-button mini-action-button-secondary"
               disabled={isPending}
+              onClick={() => tasks.openEditor(note.fileName, item)}
+            >
+              {isEditing ? 'Editing…' : 'Update'}
+            </button>
+            {note.fileName === 'INBOX.md' ? (
+              <button
+                type="button"
+                className="mini-action-button mini-action-button-secondary"
+                disabled={isPending}
+                onClick={() => {
+                  void runInlineRowAction(
+                    {
+                      type: 'promote-inbox-item',
+                      item: item.text,
+                    },
+                    'Promoted inbox item to Today.',
+                    rowKey,
+                    'Moved',
+                    {
+                      dismissOnSuccess: true,
+                    },
+                  )
+                }}
+              >
+                {isPending ? 'Working…' : 'Move to Today'}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="mini-action-button"
+              disabled={isPending}
               onClick={() => {
-                void tasks.inlineQuickAction(
+                void runInlineRowAction(
                   {
-                    type: 'promote-inbox-item',
+                    type: 'mark-root-item-done',
+                    target: note.fileName,
                     item: item.text,
                   },
-                  'Promoted inbox item to Today.',
+                  `Marked item done in ${note.label}.`,
                   rowKey,
-                  'Moved',
+                  'Done',
+                  {
+                    dismissOnSuccess: true,
+                  },
                 )
               }}
             >
-              {isPending ? 'Working…' : 'Move to Today'}
+              {isPending ? 'Working…' : 'Done'}
             </button>
-          ) : null}
-          {note.fileName === 'TODAY.md' ? (
-            <button
-              type="button"
-              className="mini-action-button mini-action-button-secondary"
-              disabled={isPending}
-              onClick={() => {
-                void tasks.inlineQuickAction(
-                  {
-                    type: 'update-root-item',
-                    target: 'TODAY.md',
-                    item: item.text,
-                    important: !item.metadata.important,
-                  },
-                  item.metadata.important
-                    ? 'Removed important flag from Today item.'
-                    : 'Marked Today item as important.',
-                  rowKey,
-                  item.metadata.important ? 'Normal' : 'Important',
-                )
-              }}
-            >
-              {isPending ? 'Working…' : item.metadata.important ? 'Normal priority' : 'Mark important'}
-            </button>
-          ) : null}
-          {note.fileName === 'TODAY.md' ? (
-            <button
-              type="button"
-              className="mini-action-button mini-action-button-secondary"
-              disabled={isPending || localOnlyModeEnabled}
-              onClick={() => prefillTicketDraft(item)}
-            >
-              Draft ticket
-            </button>
-          ) : null}
-          {note.fileName === 'TODAY.md' ? (
-            <button
-              type="button"
-              className="mini-action-button mini-action-button-secondary"
-              disabled={isPending}
-              onClick={() => {
-                setPromoteRowKey(rowKey)
-                setPromoteProjectName(item.metadata.project ?? '')
-                setPromoteSummary(item.metadata.context ?? '')
-              }}
-            >
-              Promote to project
-            </button>
-          ) : null}
-          {note.fileName === 'TODAY.md' ? (
-            <button
-              type="button"
-              className="mini-action-button mini-action-button-secondary"
-              disabled={isPending}
-              onClick={() => {
-                void tasks.inlineQuickAction(
-                  {
-                    type: 'defer-today-item',
-                    item: item.text,
-                  },
-                  'Moved Today item to Waiting.',
-                  rowKey,
-                  'Deferred',
-                )
-              }}
-            >
-              {isPending ? 'Working…' : 'Move to Waiting'}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="mini-action-button"
-            disabled={isPending}
-            onClick={() => {
-              void tasks.inlineQuickAction(
-                {
-                  type: 'mark-root-item-done',
-                  target: note.fileName,
-                  item: item.text,
-                },
-                `Marked item done in ${note.label}.`,
-                rowKey,
-                'Done',
-              )
-            }}
-          >
-            {isPending ? 'Working…' : 'Done'}
-          </button>
-          {feedback ? <span className="mini-status">{feedback}</span> : null}
+            {(note.fileName === 'TODAY.md' || note.fileName === 'WAITING.md') ? (
+              <div className="task-action-menu">
+                <button
+                  type="button"
+                  className="mini-action-button mini-action-button-secondary task-action-menu-trigger"
+                  aria-expanded={isMenuOpen}
+                  aria-label="More task actions"
+                  onClick={() => {
+                    setOpenActionMenuRow((current) => (current === rowKey ? null : rowKey))
+                  }}
+                >
+                  ...
+                </button>
+                {isMenuOpen ? (
+                  <div className="task-action-menu-popover">
+                    {note.fileName === 'TODAY.md' ? (
+                      <button
+                        type="button"
+                        className="task-action-menu-item"
+                        disabled={isPending}
+                        onClick={() => {
+                          void runInlineRowAction(
+                            {
+                              type: 'update-root-item',
+                              target: 'TODAY.md',
+                              item: item.text,
+                              important: !item.metadata.important,
+                            },
+                            item.metadata.important
+                              ? 'Removed important flag from Today item.'
+                              : 'Marked Today item as important.',
+                            rowKey,
+                            item.metadata.important ? 'Normal' : 'Important',
+                            {
+                              closeMenu: true,
+                            },
+                          )
+                        }}
+                      >
+                        {item.metadata.important ? 'Normal priority' : 'Mark important'}
+                      </button>
+                    ) : null}
+                    {note.fileName === 'TODAY.md' ? (
+                      <button
+                        type="button"
+                        className="task-action-menu-item"
+                        disabled={isPending || localOnlyModeEnabled}
+                        onClick={() => {
+                          prefillTicketDraft(item)
+                          setOpenActionMenuRow(null)
+                        }}
+                      >
+                        Draft ticket
+                      </button>
+                    ) : null}
+                    {note.fileName === 'TODAY.md' ? (
+                      <button
+                        type="button"
+                        className="task-action-menu-item"
+                        disabled={isPending}
+                        onClick={() => {
+                          setPromoteRowKey(rowKey)
+                          setPromoteProjectName(item.metadata.project ?? '')
+                          setPromoteSummary(item.metadata.context ?? '')
+                          setOpenActionMenuRow(null)
+                        }}
+                      >
+                        Promote to project
+                      </button>
+                    ) : null}
+                    {note.fileName === 'TODAY.md' ? (
+                      <button
+                        type="button"
+                        className="task-action-menu-item"
+                        disabled={isPending}
+                        onClick={() => {
+                          void runInlineRowAction(
+                            {
+                              type: 'defer-today-item',
+                              item: item.text,
+                            },
+                            'Moved Today item to Waiting.',
+                            rowKey,
+                            'Deferred',
+                            {
+                              dismissOnSuccess: true,
+                              closeMenu: true,
+                            },
+                          )
+                        }}
+                      >
+                        Move to Waiting
+                      </button>
+                    ) : null}
+                    {note.fileName === 'WAITING.md' ? (
+                      <button
+                        type="button"
+                        className="task-action-menu-item"
+                        disabled={isPending || localOnlyModeEnabled}
+                        onClick={() => {
+                          prefillFollowUpEmail(item)
+                          setOpenActionMenuRow(null)
+                        }}
+                      >
+                        Draft follow-up
+                      </button>
+                    ) : null}
+                    {note.fileName === 'WAITING.md' ? (
+                      <button
+                        type="button"
+                        className="task-action-menu-item"
+                        disabled={isPending || localOnlyModeEnabled}
+                        onClick={() => {
+                          prefillTicketDraft(item)
+                          setOpenActionMenuRow(null)
+                        }}
+                      >
+                        Draft ticket
+                      </button>
+                    ) : null}
+                    {note.fileName === 'WAITING.md' ? (
+                      <button
+                        type="button"
+                        className="task-action-menu-item"
+                        disabled={isPending}
+                        onClick={() => {
+                          void runInlineRowAction(
+                            {
+                              type: 'move-root-item',
+                              from: 'WAITING.md',
+                              to: 'TODAY.md',
+                              item: item.text,
+                            },
+                            'Moved waiting item to Today.',
+                            rowKey,
+                            'Moved',
+                            {
+                              dismissOnSuccess: true,
+                              closeMenu: true,
+                            },
+                          )
+                        }}
+                      >
+                        Move to Today
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {feedback ? <span className="mini-status">{feedback}</span> : null}
+          </div>
         </div>
         {promoteRowKey === rowKey ? (
           <form
@@ -2218,12 +2352,22 @@ function App() {
                       </header>
                       {note.items.length > 0 ? (
                         <div className="compact-task-list">
-                          {note.fileName === 'TODAY.md'
-                            ? getVisibleTodaySections(note, focusModeEnabled).flatMap((section) => ([
-                              <div key={`${note.fileName}-${section.key}`} className="task-section-heading">{section.label}</div>,
-                              ...section.items.map((item) => renderCurrentTaskRow(item, note)),
-                            ]))
-                            : getVisibleInboxItems(note, focusModeEnabled).map((item) => renderCurrentTaskRow(item, note))}
+                      {note.fileName === 'TODAY.md'
+                            ? getVisibleTodaySections(note, focusModeEnabled).flatMap((section) => {
+                              const visibleItems = section.items.filter((item) => !isRowDismissed(note.fileName, item.text))
+
+                              if (visibleItems.length === 0) {
+                                return []
+                              }
+
+                              return [
+                                <div key={`${note.fileName}-${section.key}`} className="task-section-heading">{section.label}</div>,
+                                ...visibleItems.map((item) => renderCurrentTaskRow(item, note)),
+                              ]
+                            })
+                            : getVisibleInboxItems(note, focusModeEnabled)
+                              .filter((item) => !isRowDismissed(note.fileName, item.text))
+                              .map((item) => renderCurrentTaskRow(item, note))}
                         </div>
                       ) : (
                         <p>No open items.</p>
@@ -2304,11 +2448,14 @@ function App() {
                       <span>{waitingNote.items.length} items</span>
                     </header>
                     <div className="compact-task-list">
-                      {waitingNote.items.map((item) => {
+                      {waitingNote.items
+                        .filter((item) => !isRowDismissed('WAITING.md', item.text))
+                        .map((item) => {
                         const rowKey = getTaskRowKey('WAITING.md', item.text)
                         const isPending = tasks.pendingRowKeys.includes(rowKey)
                         const feedback = tasks.rowFeedback[rowKey]
                         const isEditing = tasks.taskEditor?.rowKey === rowKey
+                        const isMenuOpen = openActionMenuRow === rowKey
 
                         return (
                           <div key={`waiting-panel-${item.text}`} className="compact-task-row">
@@ -2316,71 +2463,103 @@ function App() {
                               {renderTaskTitle('WAITING.md', item)}
                               {renderTaskMetadata(item)}
                             </div>
-                            <div className="mini-action-row">
-                              <button
-                                type="button"
-                                className="mini-action-button mini-action-button-secondary"
-                                disabled={isPending}
-                                onClick={() => tasks.openEditor('WAITING.md', item)}
-                              >
-                                {isEditing ? 'Editing…' : 'Update'}
-                              </button>
-                              <button
-                                type="button"
-                                className="mini-action-button mini-action-button-secondary"
-                                disabled={isPending || localOnlyModeEnabled}
-                                onClick={() => prefillFollowUpEmail(item)}
-                              >
-                                Draft follow-up
-                              </button>
-                              <button
-                                type="button"
-                                className="mini-action-button mini-action-button-secondary"
-                                disabled={isPending || localOnlyModeEnabled}
-                                onClick={() => prefillTicketDraft(item)}
-                              >
-                                Draft ticket
-                              </button>
-                              <button
-                                type="button"
-                                className="mini-action-button mini-action-button-secondary"
-                                disabled={isPending}
-                                onClick={() => {
-                                  void tasks.inlineQuickAction(
-                                    {
-                                      type: 'move-root-item',
-                                      from: 'WAITING.md',
-                                      to: 'TODAY.md',
-                                      item: item.text,
-                                    },
-                                    'Moved waiting item to Today.',
-                                    rowKey,
-                                    'Moved',
-                                  )
-                                }}
-                              >
-                                {isPending ? 'Working…' : 'Move to Today'}
-                              </button>
-                              <button
-                                type="button"
-                                className="mini-action-button"
-                                disabled={isPending}
-                                onClick={() => {
-                                  void tasks.inlineQuickAction(
-                                    {
-                                      type: 'mark-root-item-done',
-                                      target: 'WAITING.md',
-                                      item: item.text,
-                                    },
-                                    'Marked waiting item done.',
-                                    rowKey,
-                                    'Done',
-                                  )
-                                }}
-                              >
-                                {isPending ? 'Working…' : 'Done'}
-                              </button>
-                              {feedback ? <span className="mini-status">{feedback}</span> : null}
+                            <div className="task-row-actions">
+                              <div className="mini-action-row">
+                                <button
+                                  type="button"
+                                  className="mini-action-button mini-action-button-secondary"
+                                  disabled={isPending}
+                                  onClick={() => tasks.openEditor('WAITING.md', item)}
+                                >
+                                  {isEditing ? 'Editing…' : 'Update'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="mini-action-button"
+                                  disabled={isPending}
+                                  onClick={() => {
+                                    void runInlineRowAction(
+                                      {
+                                        type: 'mark-root-item-done',
+                                        target: 'WAITING.md',
+                                        item: item.text,
+                                      },
+                                      'Marked waiting item done.',
+                                      rowKey,
+                                      'Done',
+                                      {
+                                        dismissOnSuccess: true,
+                                      },
+                                    )
+                                  }}
+                                >
+                                  {isPending ? 'Working…' : 'Done'}
+                                </button>
+                                <div className="task-action-menu">
+                                  <button
+                                    type="button"
+                                    className="mini-action-button mini-action-button-secondary task-action-menu-trigger"
+                                    aria-expanded={isMenuOpen}
+                                    aria-label="More task actions"
+                                    onClick={() => {
+                                      setOpenActionMenuRow((current) => (current === rowKey ? null : rowKey))
+                                    }}
+                                  >
+                                    ...
+                                  </button>
+                                  {isMenuOpen ? (
+                                    <div className="task-action-menu-popover">
+                                      <button
+                                        type="button"
+                                        className="task-action-menu-item"
+                                        disabled={isPending || localOnlyModeEnabled}
+                                        onClick={() => {
+                                          prefillFollowUpEmail(item)
+                                          setOpenActionMenuRow(null)
+                                        }}
+                                      >
+                                        Draft follow-up
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="task-action-menu-item"
+                                        disabled={isPending || localOnlyModeEnabled}
+                                        onClick={() => {
+                                          prefillTicketDraft(item)
+                                          setOpenActionMenuRow(null)
+                                        }}
+                                      >
+                                        Draft ticket
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="task-action-menu-item"
+                                        disabled={isPending}
+                                        onClick={() => {
+                                          void runInlineRowAction(
+                                            {
+                                              type: 'move-root-item',
+                                              from: 'WAITING.md',
+                                              to: 'TODAY.md',
+                                              item: item.text,
+                                            },
+                                            'Moved waiting item to Today.',
+                                            rowKey,
+                                            'Moved',
+                                            {
+                                              dismissOnSuccess: true,
+                                              closeMenu: true,
+                                            },
+                                          )
+                                        }}
+                                      >
+                                        Move to Today
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </div>
+                                {feedback ? <span className="mini-status">{feedback}</span> : null}
+                              </div>
                             </div>
                             {isEditing ? renderTaskEditorForm() : null}
                           </div>

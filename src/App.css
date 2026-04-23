@@ -326,7 +326,7 @@
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
   padding: 0.7rem 0.8rem;
   border-radius: 14px;
@@ -336,12 +336,13 @@
 
 .task-content {
   min-width: 0;
-  flex: 1;
+  flex: 1 1 18rem;
 }
 
 .task-content > span {
   color: var(--ink);
   line-height: 1.35;
+  font-size: 0.95rem;
 }
 
 .task-title-row {
@@ -395,6 +396,15 @@
   gap: 0.5rem;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.task-row-actions {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+  min-width: fit-content;
 }
 
 .mini-action-button {
@@ -418,6 +428,51 @@
 
 .mini-action-button:disabled {
   opacity: 0.65;
+  cursor: default;
+}
+
+.task-action-menu {
+  position: relative;
+}
+
+.task-action-menu-trigger {
+  min-width: 2.4rem;
+  padding-inline: 0.7rem;
+}
+
+.task-action-menu-popover {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  z-index: 5;
+  min-width: 13rem;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.35rem;
+  border-radius: 14px;
+  background: rgba(10, 14, 20, 0.98);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.task-action-menu-item {
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  padding: 0.65rem 0.75rem;
+  font: inherit;
+  font-size: 0.83rem;
+  cursor: pointer;
+}
+
+.task-action-menu-item:hover:not(:disabled) {
+  background: rgba(24, 31, 42, 0.92);
+}
+
+.task-action-menu-item:disabled {
+  opacity: 0.6;
   cursor: default;
 }
 
