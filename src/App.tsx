@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type Keyboard
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import './App.css'
+import { NotesBrowser } from './NotesBrowser'
 import {
   ApiError,
   clearStoredAccessKey,
@@ -43,7 +44,7 @@ import type {
 } from './types'
 
 type LoadingState = 'boot' | 'config' | 'action' | 'email' | 'plan' | 'ticket' | null
-type AppRoute = 'chat' | 'workspace' | 'email' | 'weekly'
+type AppRoute = 'chat' | 'workspace' | 'browse' | 'email' | 'weekly'
 type ChatPanelKey = 'recentActions' | 'currentTodos' | 'waiting'
 type ChatPanelState = Record<ChatPanelKey, boolean>
 type EmailOutputFormat = 'short-reply' | 'full-reply' | 'bullet-summary' | 'reply-with-next-actions'
@@ -514,6 +515,7 @@ function App() {
     const hashMap: Record<AppRoute, string> = {
       chat: '#/',
       workspace: '#/workspace',
+      browse: '#/browse',
       email: '#/email',
       weekly: '#/weekly',
     }
@@ -1327,6 +1329,9 @@ function App() {
             <button type="button" className="secondary-button" onClick={() => void boot()}>
               Refresh
             </button>
+            <button type="button" className="secondary-button" onClick={() => navigate('browse')}>
+              Browse Notes
+            </button>
             <button type="button" className="secondary-button" onClick={() => navigate('email')}>
               Email Helper
             </button>
@@ -1824,6 +1829,44 @@ function App() {
     )
   }
 
+  if (route === 'browse') {
+    return (
+      <main className="shell workspace-shell">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Second Brain</p>
+            <h1 className="topbar-title">Browse Notes</h1>
+          </div>
+          <div className="route-actions">
+            {showInstallButton ? (
+              <button type="button" className="secondary-button" onClick={() => void handleInstall()}>
+                Install App
+              </button>
+            ) : null}
+            <button type="button" className="secondary-button" onClick={() => void handleLock()}>
+              Lock
+            </button>
+            <button type="button" className="secondary-button" onClick={() => navigate('workspace')}>
+              Workspace View
+            </button>
+            <button type="button" className="primary-button compact-button" onClick={() => navigate('chat')}>
+              Back to Chat
+            </button>
+          </div>
+        </header>
+
+        <NotesBrowser
+          onUnauthorized={handleUnauthorized}
+          setActionMessage={setActionMessage}
+          setError={setError}
+        />
+
+        {actionMessage ? <div className="success-banner">{actionMessage}</div> : null}
+        {error ? <div className="error-banner">{error}</div> : null}
+      </main>
+    )
+  }
+
   if (route === 'email') {
     return (
       <main className="minimal-shell email-shell">
@@ -1840,6 +1883,9 @@ function App() {
             ) : null}
             <button type="button" className="secondary-button" onClick={() => void handleLock()}>
               Lock
+            </button>
+            <button type="button" className="secondary-button" onClick={() => navigate('browse')}>
+              Browse Notes
             </button>
             <button type="button" className="secondary-button" onClick={() => navigate('workspace')}>
               Workspace View
@@ -2022,6 +2068,9 @@ function App() {
             >
               {weeklyLoading ? 'Loading…' : 'Refresh'}
             </button>
+            <button type="button" className="secondary-button" onClick={() => navigate('browse')}>
+              Browse Notes
+            </button>
             <button type="button" className="primary-button compact-button" onClick={() => navigate('chat')}>
               Back to Chat
             </button>
@@ -2062,6 +2111,9 @@ function App() {
           ) : null}
           <button type="button" className="secondary-button" onClick={() => void handleLock()}>
             Lock
+          </button>
+          <button type="button" className="secondary-button" onClick={() => navigate('browse')}>
+            Browse Notes
           </button>
           <button
             type="button"
@@ -2768,6 +2820,7 @@ function renderWorkflowList(label: string, items: string[]) {
 
 function getRouteFromHash(hash: string): AppRoute {
   if (hash === '#/workspace') return 'workspace'
+  if (hash === '#/browse') return 'browse'
   if (hash === '#/email') return 'email'
   if (hash === '#/weekly') return 'weekly'
   return 'chat'

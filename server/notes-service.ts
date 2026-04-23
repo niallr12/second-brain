@@ -52,6 +52,15 @@ interface NoteChunk {
   citation: string
 }
 
+interface NoteTreeNode {
+  type: 'folder' | 'file'
+  name: string
+  path: string
+  title?: string
+  updatedAt?: string | null
+  children?: NoteTreeNode[]
+}
+
 interface RootNoteMetadata {
   ticket?: string
   link?: string
@@ -305,6 +314,59 @@ export class NotesService {
         title: document.title,
         updatedAt: document.updatedAt,
       }))
+  }
+
+  getNoteTree() {
+    const root: NoteTreeNode = {
+      type: 'folder',
+      name: 'root',
+      path: '',
+      children: [],
+    }
+
+    for (const document of this.documents) {
+      const segments = document.relativePath.split('/').filter(Boolean)
+      let currentNode = root
+      let currentPath = ''
+
+      for (const [index, segment] of segments.entries()) {
+        currentPath = currentPath ? `${currentPath}/${segment}` : segment
+        const isLeaf = index === segments.length - 1
+        const existingNode = currentNode.children?.find((child) => child.path === currentPath)
+
+        if (existingNode) {
+          if (!isLeaf && existingNode.type === 'folder') {
+            currentNode = existingNode
+          }
+
+          continue
+        }
+
+        const nextNode: NoteTreeNode = isLeaf
+          ? {
+              type: 'file',
+              name: segment,
+              path: document.relativePath,
+              title: document.title,
+              updatedAt: document.updatedAt,
+            }
+          : {
+              type: 'folder',
+              name: segment,
+              path: currentPath,
+              children: [],
+            }
+
+        currentNode.children ??= []
+        currentNode.children.push(nextNode)
+
+        if (!isLeaf && nextNode.type === 'folder') {
+          currentNode = nextNode
+        }
+      }
+    }
+
+    return sortNoteTreeNodes(root.children ?? [])
   }
 
   getNoteContext(relativePath: string) {
@@ -1613,6 +1675,27 @@ function getProjectName(relativePath: string) {
 function getProjectsDirectoryName(relativePath: string) {
   const parts = relativePath.split('/')
   return parts.find((part) => part === 'projects' || part === 'Projects (Active)') ?? null
+}
+
+function sortNoteTreeNodes(nodes: NoteTreeNode[]): NoteTreeNode[] {
+  return [...nodes]
+    .sort((left, right) => {
+      if (left.type !== right.type) {
+        return left.type === 'folder' ? -1 : 1
+      }
+
+      return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+    })
+    .map((node) => {
+      if (node.type === 'folder') {
+        return {
+          ...node,
+          children: sortNoteTreeNodes(node.children ?? []),
+        }
+      }
+
+      return node
+    })
 }
 
 function parseAliases(frontmatter: unknown) {

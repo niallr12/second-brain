@@ -31,6 +31,10 @@ const ticketDraftSchema = z.object({
   notePath: z.string().optional(),
   extraContext: z.string().optional(),
 })
+const noteWriteSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+})
 const rootNoteNameSchema = z.enum(['TODAY.md', 'WAITING.md', 'INBOX.md'])
 const quickActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('capture-root-item'), target: rootNoteNameSchema, item: z.string().min(1) }),
@@ -192,6 +196,30 @@ app.get('/api/notes/context', async (request: Request, response: Response) => {
   } catch (error) {
     response.status(400).json({
       error: error instanceof Error ? error.message : 'Unable to load note context.',
+    })
+  }
+})
+
+app.get('/api/notes/tree', (_request: Request, response: Response) => {
+  try {
+    response.json({
+      nodes: notesService.getNoteTree(),
+    })
+  } catch (error) {
+    response.status(500).json({
+      error: error instanceof Error ? error.message : 'Unable to build note tree.',
+    })
+  }
+})
+
+app.post('/api/notes/write', async (request: Request, response: Response) => {
+  try {
+    const body = noteWriteSchema.parse(request.body)
+    const result = await notesService.writeNote(body.path, body.content)
+    response.json(result)
+  } catch (error) {
+    response.status(400).json({
+      error: error instanceof Error ? error.message : 'Unable to save note.',
     })
   }
 })

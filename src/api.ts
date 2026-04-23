@@ -9,6 +9,8 @@ import type {
   HistoryEntry,
   NoteContextResponse,
   NoteContentResponse,
+  NoteTreeResponse,
+  NoteWriteResponse,
   QuickActionRequest,
   QuickActionResponse,
   SearchResponse,
@@ -170,6 +172,17 @@ export function fetchNoteContent(notePath: string) {
 export function fetchNoteContext(notePath: string) {
   const params = new URLSearchParams({ path: notePath })
   return request<NoteContextResponse>(`/api/notes/context?${params.toString()}`)
+}
+
+export function fetchNoteTree() {
+  return request<NoteTreeResponse>('/api/notes/tree')
+}
+
+export function saveNoteContent(payload: { path: string; content: string }) {
+  return request<NoteWriteResponse>('/api/notes/write', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export function generateDayPlan(payload?: { focus?: string }) {

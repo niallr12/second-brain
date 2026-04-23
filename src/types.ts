@@ -186,6 +186,24 @@ export interface NoteContentResponse {
   content: string
 }
 
+export interface NoteWriteResponse {
+  path: string
+  bytesWritten: number
+}
+
+export interface NoteTreeNode {
+  type: 'folder' | 'file'
+  name: string
+  path: string
+  title?: string
+  updatedAt?: string | null
+  children?: NoteTreeNode[]
+}
+
+export interface NoteTreeResponse {
+  nodes: NoteTreeNode[]
+}
+
 export interface NoteContextResponse {
   path: string
   relatedNotes: Array<{
