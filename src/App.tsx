@@ -165,6 +165,7 @@ function App() {
     setActionMessage,
     setChatPanels,
   })
+  const clearChatSessionRef = useRef(chat.clearSession)
 
   useEffect(() => {
     return () => {
@@ -215,6 +216,10 @@ function App() {
   }, [chatPanels])
 
   useEffect(() => {
+    clearChatSessionRef.current = chat.clearSession
+  }, [chat.clearSession])
+
+  useEffect(() => {
     setDismissedRowKeys([])
     setOpenActionMenuRow(null)
   }, [dashboard])
@@ -228,7 +233,7 @@ function App() {
       if (!nextAuthStatus.authenticated) {
         setConfig(null)
         setDashboard(null)
-        chat.clearSession()
+        clearChatSessionRef.current()
         setError(null)
         return
       }
@@ -253,7 +258,7 @@ function App() {
     } finally {
       setLoadingState(null)
     }
-  }, [chat, handleUnauthorized])
+  }, [handleUnauthorized])
 
   useEffect(() => {
     void boot()
